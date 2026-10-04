@@ -28,7 +28,6 @@ use Desertica\Billing\Sunat\SunatGateway;
 use Desertica\Billing\Xml\BatchFactory;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
-use Greenter\See;
 use Greenter\Ws\Services\SunatEndpoints;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
@@ -56,7 +55,7 @@ final class App
         $gateway ??= self::gateway($settings, $certificate);
         $documents = new DocumentRepository($pdo);
         $storage = new FileStorage($settings->storageDir);
-        $factory = new DocumentFactory($settings->issuer);
+        $factory = new DocumentFactory($settings->issuer, $settings->billing);
         $signer = new XmlSigner($certificate);
         $pdf = new PdfRenderer($settings->wkhtmltopdfBinary, $settings->logoPath, $logger);
 
@@ -70,6 +69,8 @@ final class App
             $clock,
             $settings->boletaSubmission,
             $logger,
+            $settings->billing->anonymousBoletaMaxCents,
+            $settings->alreadyRegisteredCodes,
         );
         $batches = new BatchService(
             $documents,
@@ -118,11 +119,14 @@ final class App
             return new FakeSunatGateway();
         }
 
-        $see = new See();
-        $see->setCertificate($certificate);
-        $see->setService($settings->environment === Environment::Production ? SunatEndpoints::FE_PRODUCCION : SunatEndpoints::FE_BETA);
-        $see->setClaveSOL($settings->issuer->ruc, $settings->solUser, $settings->solPassword->reveal());
-
-        return new GreenterSunatGateway($see);
+        return GreenterSunatGateway::connect(
+            $certificate,
+            $settings->issuer->ruc,
+            $settings->solUser,
+            $settings->solPassword->reveal(),
+            $settings->environment === Environment::Production ? SunatEndpoints::FE_PRODUCCION : SunatEndpoints::FE_BETA,
+            $settings->cdrConsultUrl,
+            $settings->sunatCaFile,
+        );
     }
 }
