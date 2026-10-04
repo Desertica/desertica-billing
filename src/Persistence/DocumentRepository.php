@@ -92,7 +92,7 @@ SQL);
     {
         $stmt = $this->pdo->prepare(
             "SELECT * FROM documents WHERE issue_date = :d AND submission = 'DAILY_SUMMARY' AND status = 'ISSUED' "
-            . 'AND doc_type IN (\'BOLETA\', \'NOTA_CREDITO\', \'NOTA_DEBITO\') ORDER BY series, number'
+            . 'AND ticket IS NULL AND doc_type IN (\'BOLETA\', \'NOTA_CREDITO\', \'NOTA_DEBITO\') ORDER BY currency, series, number'
         );
         $stmt->execute(['d' => $issueDate]);
 

@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     ticket TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     file_name TEXT NOT NULL,
+    ref_date TEXT NOT NULL,
+    currency TEXT,
     status TEXT NOT NULL,
     sunat_code TEXT,
     sunat_message TEXT,
