@@ -11,6 +11,7 @@ use Desertica\Billing\Http\Controller\DocumentController;
 use Desertica\Billing\Http\Controller\HealthController;
 use Desertica\Billing\Http\Error\ErrorHandler;
 use Desertica\Billing\Http\Middleware\BearerAuthMiddleware;
+use Desertica\Billing\Http\Middleware\RequestLogMiddleware;
 use Desertica\Billing\Log\StderrLogger;
 use Desertica\Billing\Persistence\Database;
 use Desertica\Billing\Persistence\DocumentRepository;
@@ -86,11 +87,13 @@ final class App
         $batchController = new BatchController($batches);
 
         $app = AppFactory::create();
-        // Orden de ejecución (el último que se añade corre primero): errores → auth → rutas.
+        // Orden de ejecución (el último que se añade corre primero): log → errores → auth → rutas.
         $app->addRoutingMiddleware();
         $app->add(new BearerAuthMiddleware($settings->serviceToken));
         $errors = $app->addErrorMiddleware(false, false, false, $logger);
         $errors->setDefaultErrorHandler(new ErrorHandler($app->getResponseFactory(), $logger));
+        // El más externo: ve el estado final, también el de las respuestas de error.
+        $app->add(new RequestLogMiddleware($logger));
 
         $app->get('/health', new HealthController($settings->environment));
         $app->post('/v1/documents', [$documentController, 'emit']);
