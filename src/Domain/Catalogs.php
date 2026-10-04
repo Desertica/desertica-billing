@@ -39,8 +39,17 @@ final class Catalogs
     /** Catálogo 51: venta interna. */
     public const OPERATION_DOMESTIC_SALE = '0101';
 
-    /** Catálogo 03: unidad de medida comercial (el que usan los ejemplos de Greenter). */
+    /** Catálogo 03: unidad de medida por defecto (la de los ejemplos de Greenter); configurable con BILLING_UNIT_CODE. */
     public const UNIT = 'NIU';
+
+    /** Catálogo 52: leyenda «Agencia de Viaje – Paquete turístico» (fuente de terceros; confirmar el texto con el contador). */
+    public const LEGEND_TRAVEL_AGENCY = '2004';
+    public const LEGEND_TRAVEL_AGENCY_TEXT = 'Agencia de Viaje – Paquete turístico';
+
+    /** Catálogo 06: sin documento de identidad (boleta sin receptor); número «-» y razón social genérica. */
+    public const ID_TYPE_NONE = '0';
+    public const ANONYMOUS_NUMBER = '-';
+    public const ANONYMOUS_NAME = 'CLIENTES VARIOS';
 
     /** Catálogo 52: leyenda de monto en letras. */
     public const LEGEND_AMOUNT_IN_WORDS = '1000';

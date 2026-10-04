@@ -34,8 +34,18 @@ abstract class HttpTestCase extends TestCase
         $this->storageDir = sys_get_temp_dir() . '/billing-test-' . bin2hex(random_bytes(6));
         $this->gateway = new FakeSunatGateway();
         $this->clock = new FixedClock();
+        $this->rebuild();
+    }
+
+    /**
+     * Reconstruye la aplicación (base vacía) con otra configuración.
+     *
+     * @param array<string, string> $overrides
+     */
+    protected function rebuild(array $overrides = []): void
+    {
         $this->app = App::create(
-            $this->settings(),
+            $this->settings($overrides),
             new NullLogger(),
             $this->gateway,
             $this->clock,

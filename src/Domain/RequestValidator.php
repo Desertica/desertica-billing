@@ -19,6 +19,13 @@ final class RequestValidator
     private array $errors = [];
 
     /**
+     * @param int $anonymousBoletaMaxCents boletas en PEN hasta este monto pueden omitir `customer`; 0 = el receptor siempre es obligatorio
+     */
+    public function __construct(private readonly int $anonymousBoletaMaxCents = 0)
+    {
+    }
+
+    /**
      * @param array<mixed> $body
      */
     public function validate(array $body, \DateTimeImmutable $today): EmitRequest
@@ -62,9 +69,9 @@ final class RequestValidator
             }
         }
 
-        $customer = $this->customer($body['customer'] ?? null, $docType);
         $items = $this->items($body['items'] ?? null);
         $totalCents = $this->int($body, 'totalCents', 1, PHP_INT_MAX);
+        $customer = $this->customerOrAnonymous($body, $docType, $currency, $totalCents);
         if ($totalCents !== null && $items !== []) {
             $sum = array_sum(array_column($items, 'totalCents'));
             if ($sum !== $totalCents) {
@@ -89,7 +96,7 @@ final class RequestValidator
         }
 
         /** @var DocType $docType */
-        /** @var array{idDocType: string, idDocNumber: string, name: string} $customer */
+        /** @var array{idDocType: string, idDocNumber: string, name: string}|null $customer */
         return new EmitRequest(
             strtolower((string) $externalId),
             $docType,
@@ -163,6 +170,27 @@ final class RequestValidator
                 $this->errors[] = 'DAILY_SUMMARY solo aplica a boletas y a notas que modifican boletas.';
             }
         }
+    }
+
+    /**
+     * El receptor puede omitirse solo en una boleta en PEN cuyo total no supere el tope configurado (0 = nunca).
+     * Si se omite, queda `null` y el XML lleva el receptor genérico.
+     *
+     * @param array<mixed> $body
+     * @return array<string, string>|null
+     */
+    private function customerOrAnonymous(array $body, ?DocType $docType, ?string $currency, ?int $totalCents): ?array
+    {
+        $anonymousAllowed = $this->anonymousBoletaMaxCents > 0
+            && $docType === DocType::Boleta
+            && $currency === 'PEN'
+            && $totalCents !== null
+            && $totalCents <= $this->anonymousBoletaMaxCents;
+        if (!isset($body['customer']) && $anonymousAllowed) {
+            return null;
+        }
+
+        return $this->customer($body['customer'] ?? null, $docType);
     }
 
     /**

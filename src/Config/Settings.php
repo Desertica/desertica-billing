@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Desertica\Billing\Config;
 
+use Greenter\Ws\Services\SunatEndpoints;
+
 /**
  * Configuración del servicio. Todo viene de variables de entorno; nada se infiere.
  */
@@ -23,6 +25,11 @@ final class Settings
         public readonly Issuer $issuer,
         public readonly string $wkhtmltopdfBinary,
         public readonly string $logoPath,
+        public readonly BillingOptions $billing = new BillingOptions(),
+        public readonly string $cdrConsultUrl = '',
+        public readonly string $sunatCaFile = '',
+        /** @var list<string> */
+        public readonly array $alreadyRegisteredCodes = ['1033'],
     ) {
     }
 
@@ -75,6 +82,33 @@ final class Settings
             );
         }
 
+        $unitCode = $get('BILLING_UNIT_CODE', 'NIU');
+        if (!preg_match('/^[A-Z0-9]{1,3}$/', $unitCode)) {
+            throw new ConfigException('BILLING_UNIT_CODE debe ser un código de 1 a 3 caracteres A-Z o 0-9 (catálogo 03 de SUNAT).');
+        }
+        $legend = $get('BILLING_LEGEND_2004', 'false');
+        if (!in_array($legend, ['true', 'false'], true)) {
+            throw new ConfigException('BILLING_LEGEND_2004 debe ser true o false.');
+        }
+        $anonymousMax = $get('BILLING_ANONYMOUS_BOLETA_MAX_CENTS', '0');
+        if (!preg_match('/^\d{1,9}$/', $anonymousMax)) {
+            throw new ConfigException('BILLING_ANONYMOUS_BOLETA_MAX_CENTS debe ser un entero en céntimos (0 = receptor siempre obligatorio).');
+        }
+
+        // La consulta de CDR (getStatusCdr) vive en otro servicio de SUNAT; solo se activa en PRODUCTION por defecto.
+        $cdrConsultUrl = $get('BILLING_CDR_CONSULT_URL', $environment === Environment::Production ? SunatEndpoints::FE_CONSULTA_CDR : '-');
+        $cdrConsultUrl = $cdrConsultUrl === '-' ? '' : $cdrConsultUrl;
+        if ($cdrConsultUrl !== '' && !str_starts_with($cdrConsultUrl, 'https://')) {
+            throw new ConfigException('BILLING_CDR_CONSULT_URL debe empezar con https://.');
+        }
+
+        $registered = array_values(array_filter(array_map('trim', explode(',', $get('BILLING_ALREADY_REGISTERED_CODES', '1033')))));
+        foreach ($registered as $code) {
+            if (!preg_match('/^\d{4}$/', $code)) {
+                throw new ConfigException('BILLING_ALREADY_REGISTERED_CODES debe ser una lista de códigos SUNAT de 4 dígitos separados por comas.');
+            }
+        }
+
         return new self(
             $environment,
             new Secret($token),
@@ -99,6 +133,10 @@ final class Settings
             ),
             $get('BILLING_WKHTMLTOPDF', 'wkhtmltopdf'),
             $get('BILLING_LOGO_PATH', ''),
+            new BillingOptions($unitCode, $legend === 'true', (int) $anonymousMax),
+            $cdrConsultUrl,
+            $get('BILLING_SUNAT_CA_FILE', ''),
+            $registered,
         );
     }
 }
