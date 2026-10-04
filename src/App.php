@@ -6,6 +6,7 @@ namespace Desertica\Billing;
 
 use Desertica\Billing\Config\Environment;
 use Desertica\Billing\Config\Settings;
+use Desertica\Billing\Http\Controller\BatchController;
 use Desertica\Billing\Http\Controller\DocumentController;
 use Desertica\Billing\Http\Controller\HealthController;
 use Desertica\Billing\Http\Error\ErrorHandler;
@@ -13,7 +14,9 @@ use Desertica\Billing\Http\Middleware\BearerAuthMiddleware;
 use Desertica\Billing\Log\StderrLogger;
 use Desertica\Billing\Persistence\Database;
 use Desertica\Billing\Persistence\DocumentRepository;
+use Desertica\Billing\Persistence\TicketRepository;
 use Desertica\Billing\Security\CertificateProvider;
+use Desertica\Billing\Service\BatchService;
 use Desertica\Billing\Service\Clock;
 use Desertica\Billing\Service\EmissionService;
 use Desertica\Billing\Service\PdfRenderer;
@@ -22,6 +25,7 @@ use Desertica\Billing\Storage\FileStorage;
 use Desertica\Billing\Sunat\FakeSunatGateway;
 use Desertica\Billing\Sunat\GreenterSunatGateway;
 use Desertica\Billing\Sunat\SunatGateway;
+use Desertica\Billing\Xml\BatchFactory;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
 use Greenter\See;
@@ -67,7 +71,18 @@ final class App
             $settings->boletaSubmission,
             $logger,
         );
+        $batches = new BatchService(
+            $documents,
+            new TicketRepository($pdo),
+            $storage,
+            $gateway,
+            new BatchFactory($factory),
+            $signer,
+            $clock,
+            $logger,
+        );
         $documentController = new DocumentController($emission);
+        $batchController = new BatchController($batches);
 
         $app = AppFactory::create();
         // Orden de ejecución (el último que se añade corre primero): errores → auth → rutas.
@@ -80,6 +95,9 @@ final class App
         $app->post('/v1/documents', [$documentController, 'emit']);
         $app->get('/v1/documents/{externalId}', [$documentController, 'get']);
         $app->get('/v1/documents/{externalId}/files/{kind}', [$documentController, 'file']);
+        $app->post('/v1/documents/{externalId}/void', [$batchController, 'void']);
+        $app->post('/v1/summaries/daily', [$batchController, 'dailySummary']);
+        $app->get('/v1/tickets/{ticket}', [$batchController, 'ticket']);
 
         return $app;
     }
