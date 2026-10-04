@@ -84,6 +84,62 @@ final class RequestValidatorTest extends TestCase
         self::assertStringContainsString($needle, $this->failure(Payloads::boleta(['customer' => $customer])));
     }
 
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function textsThatWouldBreakTheXml(): iterable
+    {
+        yield 'fin de CDATA' => ['Tour ]]> extra'];
+        yield 'control C0' => ["Tour\x01"];
+        yield 'nulo' => ["To\x00ur"];
+        yield 'no-carácter U+FFFE' => ["Tour \u{FFFE}"];
+        yield 'no-carácter U+FFFF' => ["Tour \u{FFFF}"];
+    }
+
+    #[DataProvider('textsThatWouldBreakTheXml')]
+    public function testRejectsTextsThatCannotBeWrittenToXml(string $text): void
+    {
+        $item = ['description' => $text, 'quantity' => 1, 'unitPriceCents' => 100, 'totalCents' => 100];
+
+        $this->failure(Payloads::boleta(['items' => [$item], 'totalCents' => 100]));
+        $this->failure(Payloads::boleta(['customer' => ['idDocType' => 'DNI', 'idDocNumber' => '46712369', 'name' => $text]]));
+    }
+
+    public function testAcceptsTextsXmlCanCarry(): void
+    {
+        $text = "Dunas & <sandboard> \"x\" 'y' 🏜️ 日本語 {{ 7*7 }}\ttab";
+        $item = ['description' => $text, 'quantity' => 1, 'unitPriceCents' => 100, 'totalCents' => 100];
+
+        $request = (new RequestValidator())->validate(Payloads::boleta(['items' => [$item], 'totalCents' => 100]), $this->today());
+
+        self::assertSame($text, $request->items[0]['description']);
+    }
+
+    public function testRejectsAmountsThatCouldOverflowIntegerArithmetic(): void
+    {
+        $huge = PHP_INT_MAX;
+        $this->failure(Payloads::boleta(['items' => [['description' => 'x', 'quantity' => 1, 'unitPriceCents' => $huge, 'totalCents' => $huge]], 'totalCents' => $huge]));
+        $trillion = 100_000_000_000_000;
+        $this->failure(Payloads::boleta([
+            'items' => [['description' => 'x', 'quantity' => 1000000, 'unitPriceCents' => 100_000_000, 'totalCents' => $trillion]],
+            'totalCents' => $trillion,
+        ]));
+    }
+
+    public function testAcceptsTheLargestItemAndComputesItsTaxWithoutOverflow(): void
+    {
+        $max = 100_000_000;
+        $request = (new RequestValidator())->validate(
+            Payloads::factura(['items' => [['description' => 'x', 'quantity' => 1, 'unitPriceCents' => $max, 'totalCents' => $max]], 'totalCents' => $max]),
+            $this->today(),
+        );
+        $totals = \Desertica\Billing\Domain\TaxCalculator::totals([['quantity' => 1, 'totalCents' => $max]], 1800);
+
+        self::assertSame($max, $request->totalCents);
+        self::assertSame($max, $totals['taxableCents'] + $totals['igvCents']);
+        self::assertSame('847457.6300000000', \Desertica\Billing\Domain\TaxCalculator::unitValue($totals['taxableCents'], 1));
+    }
+
     public function testUsdRequiresExchangeRate(): void
     {
         self::assertStringContainsString('exchangeRate', $this->failure(Payloads::boleta(['currency' => 'USD'])));

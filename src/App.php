@@ -15,6 +15,7 @@ use Desertica\Billing\Http\Middleware\RequestLogMiddleware;
 use Desertica\Billing\Log\StderrLogger;
 use Desertica\Billing\Persistence\Database;
 use Desertica\Billing\Persistence\DocumentRepository;
+use Desertica\Billing\Persistence\LockRepository;
 use Desertica\Billing\Persistence\TicketRepository;
 use Desertica\Billing\Security\CertificateProvider;
 use Desertica\Billing\Service\BatchService;
@@ -55,6 +56,7 @@ final class App
         $certificate = self::certificate($settings);
         $gateway ??= self::gateway($settings, $certificate);
         $documents = new DocumentRepository($pdo);
+        $locks = new LockRepository($pdo);
         $storage = new FileStorage($settings->storageDir);
         $factory = new DocumentFactory($settings->issuer, $settings->billing);
         $signer = new XmlSigner($certificate);
@@ -70,6 +72,7 @@ final class App
             $clock,
             $settings->boletaSubmission,
             $logger,
+            $locks,
             $settings->billing->anonymousBoletaMaxCents,
             $settings->alreadyRegisteredCodes,
         );
@@ -82,6 +85,7 @@ final class App
             $signer,
             $clock,
             $logger,
+            $locks,
         );
         $documentController = new DocumentController($emission);
         $batchController = new BatchController($batches);

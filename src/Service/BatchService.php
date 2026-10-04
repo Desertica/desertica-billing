@@ -8,6 +8,7 @@ use Desertica\Billing\Domain\DocType;
 use Desertica\Billing\Http\Error\ApiError;
 use Desertica\Billing\Persistence\DocumentRecord;
 use Desertica\Billing\Persistence\DocumentRepository;
+use Desertica\Billing\Persistence\LockRepository;
 use Desertica\Billing\Persistence\TicketRecord;
 use Desertica\Billing\Persistence\TicketRepository;
 use Desertica\Billing\Storage\FileStorage;
@@ -27,6 +28,8 @@ use Psr\Log\LoggerInterface;
  */
 final class BatchService
 {
+    private const LOCK_SECONDS = 130;
+
     public function __construct(
         private readonly DocumentRepository $documents,
         private readonly TicketRepository $tickets,
@@ -36,11 +39,29 @@ final class BatchService
         private readonly XmlSigner $signer,
         private readonly Clock $clock,
         private readonly LoggerInterface $logger,
+        private readonly LockRepository $locks,
     ) {
     }
 
     public function void(string $externalId, string $reason, string $voidDate): TicketRecord
     {
+        $this->documents->find($externalId) ?? throw ApiError::notFound('Comprobante desconocido.');
+
+        // Mismo cerrojo que la emisión: no se anula un comprobante mientras se firma/envía, ni dos bajas a la vez.
+        $lock = EmissionService::lockName($externalId);
+        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+            throw ApiError::conflict('VOID_CONFLICT', 'Hay otra operación en curso sobre este comprobante; reintenta en unos segundos.');
+        }
+        try {
+            return $this->voidLocked($externalId, $reason, $voidDate);
+        } finally {
+            $this->locks->release($lock);
+        }
+    }
+
+    private function voidLocked(string $externalId, string $reason, string $voidDate): TicketRecord
+    {
+        // Se lee de nuevo con el cerrojo tomado: el estado pudo cambiar mientras se esperaba.
         $record = $this->documents->find($externalId) ?? throw ApiError::notFound('Comprobante desconocido.');
 
         if ($record->voidTicket !== null) {
@@ -83,6 +104,20 @@ final class BatchService
      * resumen con una sola moneda; repetir la llamada atiende la otra.
      */
     public function dailySummary(string $date, ?string $currency = null): TicketRecord
+    {
+        $lock = 'summary:' . $date;
+        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+            // Dos resúmenes simultáneos de la misma fecha mandarían las mismas boletas dos veces.
+            throw ApiError::upstream('Ya hay un resumen de esa fecha en curso; reintenta en unos segundos.');
+        }
+        try {
+            return $this->dailySummaryLocked($date, $currency);
+        } finally {
+            $this->locks->release($lock);
+        }
+    }
+
+    private function dailySummaryLocked(string $date, ?string $currency): TicketRecord
     {
         $pending = $this->documents->pendingForSummary($date);
         if ($currency !== null) {

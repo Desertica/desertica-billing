@@ -34,6 +34,21 @@ final class Settings
     }
 
     /**
+     * Valores que no deben aparecer nunca en un log ni en un mensaje de error.
+     *
+     * @return list<string>
+     */
+    public function secretValues(): array
+    {
+        return array_values(array_filter([
+            $this->serviceToken->reveal(),
+            $this->certPassword->reveal(),
+            $this->solPassword->reveal(),
+            $this->solUser,
+        ], static fn (string $v): bool => $v !== ''));
+    }
+
+    /**
      * @param array<string, mixed> $env
      */
     public static function fromEnv(array $env): self

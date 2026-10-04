@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS ticket_documents (
     PRIMARY KEY (ticket, external_id)
 )
 SQL);
+        $pdo->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS locks (
+    name TEXT PRIMARY KEY,
+    until INTEGER NOT NULL
+)
+SQL);
         // Correlativos de los resúmenes diarios (RC) y comunicaciones de baja (RA): los lleva este servicio
         // porque son documentos propios, no series de comprobantes (esas son del API).
         $pdo->exec(<<<'SQL'

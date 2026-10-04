@@ -14,6 +14,10 @@ final class RequestValidator
 {
     private const UUID = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
     private const MAX_ITEMS = 500;
+    /** Tope por ítem (S/ 1 000 000,00): mantiene toda la aritmética entera lejos del desbordamiento de int64. */
+    private const MAX_ITEM_CENTS = 100_000_000;
+    /** Tope del documento: 500 ítems al máximo. */
+    private const MAX_TOTAL_CENTS = 50_000_000_000;
 
     /** @var list<string> */
     private array $errors = [];
@@ -70,7 +74,7 @@ final class RequestValidator
         }
 
         $items = $this->items($body['items'] ?? null);
-        $totalCents = $this->int($body, 'totalCents', 1, PHP_INT_MAX);
+        $totalCents = $this->int($body, 'totalCents', 1, self::MAX_TOTAL_CENTS);
         $customer = $this->customerOrAnonymous($body, $docType, $currency, $totalCents);
         if ($totalCents !== null && $items !== []) {
             $sum = array_sum(array_column($items, 'totalCents'));
@@ -260,8 +264,8 @@ final class RequestValidator
             }
             $description = $this->string($item, "items[$i].description", 1, 250, 'description');
             $quantity = $this->int($item, "items[$i].quantity", 1, 1000000, 'quantity');
-            $unit = $this->int($item, "items[$i].unitPriceCents", 1, PHP_INT_MAX, 'unitPriceCents');
-            $total = $this->int($item, "items[$i].totalCents", 1, PHP_INT_MAX, 'totalCents');
+            $unit = $this->int($item, "items[$i].unitPriceCents", 1, self::MAX_ITEM_CENTS, 'unitPriceCents');
+            $total = $this->int($item, "items[$i].totalCents", 1, self::MAX_ITEM_CENTS, 'totalCents');
             if ($quantity !== null && $unit !== null && $total !== null && $quantity * $unit !== $total) {
                 $this->errors[] = sprintf('items[%d].totalCents debe ser quantity × unitPriceCents (%d).', $i, $quantity * $unit);
             }
@@ -329,8 +333,15 @@ final class RequestValidator
 
             return null;
         }
-        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $value)) {
+        // Caracteres que XML 1.0 no admite: controles (salvo tab, LF y CR) y los no-caracteres U+FFFE y U+FFFF.
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]|\x{FFFE}|\x{FFFF}/u', $value) === 1) {
             $this->errors[] = sprintf('%s contiene caracteres de control.', $label);
+
+            return null;
+        }
+        // Greenter escribe los textos dentro de CDATA: «]]>» cerraría la sección y rompería el XML firmado.
+        if (str_contains($value, ']]>')) {
+            $this->errors[] = sprintf('%s no puede contener «]]>».', $label);
 
             return null;
         }
