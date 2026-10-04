@@ -40,12 +40,17 @@ final class BatchController
 
     public function dailySummary(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
     {
-        $date = DocumentController::jsonBody($request)['date'] ?? null;
+        $body = DocumentController::jsonBody($request);
+        $date = $body['date'] ?? null;
         if (!is_string($date) || !self::isDate($date)) {
             throw ApiError::unprocessable('VALIDATION_ERROR', 'date es obligatorio y debe ser una fecha YYYY-MM-DD.');
         }
+        $currency = $body['currency'] ?? null;
+        if ($currency !== null && !in_array($currency, ['PEN', 'USD'], true)) {
+            throw ApiError::unprocessable('VALIDATION_ERROR', 'currency debe ser PEN o USD.');
+        }
 
-        return Json::respond($response, $this->batches->dailySummary($date)->toResult());
+        return Json::respond($response, $this->batches->dailySummary($date, $currency)->toResult());
     }
 
     /**

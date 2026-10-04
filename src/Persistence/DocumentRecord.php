@@ -81,17 +81,22 @@ final class DocumentRecord
      */
     public function toResult(): array
     {
-        return [
+        $result = [
             'externalId' => $this->externalId,
             'status' => $this->status,
             'taxableCents' => $this->taxableCents,
             'igvCents' => $this->igvCents,
             'totalCents' => $this->totalCents,
-            'hash' => $this->hash,
             'sunatCode' => $this->sunatCode,
             'sunatMessage' => $this->sunatMessage,
             'ticket' => $this->ticket,
             'files' => ['xml' => $this->hasXml, 'cdr' => $this->hasCdr, 'pdf' => $this->hasPdf],
         ];
+        // El contrato define `hash` como string (no nulo): sin firma todavía se omite.
+        if ($this->hash !== null) {
+            $result['hash'] = $this->hash;
+        }
+
+        return $result;
     }
 }

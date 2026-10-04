@@ -228,6 +228,61 @@ final class BatchTest extends HttpTestCase
         self::assertSame('USD', $this->xpathValue($this->gateway->sentBatches[1], 'string(//*[local-name()="TotalAmount"]/@currencyID)'));
     }
 
+    public function testDailySummaryWithCurrencyAttendsThatCurrencyFirst(): void
+    {
+        $this->api('POST', '/v1/documents', Payloads::boleta(['submission' => 'DAILY_SUMMARY']));
+        $this->api('POST', '/v1/documents', Payloads::boleta([
+            'externalId' => self::BOLETA_2,
+            'number' => 2,
+            'currency' => 'USD',
+            'exchangeRate' => '3.7500',
+            'submission' => 'DAILY_SUMMARY',
+        ]));
+
+        $usd = $this->json($this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04', 'currency' => 'USD']));
+        self::assertSame('USD', $this->xpathValue($this->gateway->sentBatches[0], 'string(//*[local-name()="TotalAmount"]/@currencyID)'));
+        self::assertSame('1', $this->xpathValue($this->gateway->sentBatches[0], 'count(//*[local-name()="SummaryDocumentsLine"])'));
+
+        // Repetir la misma moneda devuelve su ticket sin reenviar; la otra moneda sigue pendiente.
+        $again = $this->json($this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04', 'currency' => 'USD']));
+        self::assertSame($usd['ticket'], $again['ticket']);
+        self::assertCount(1, $this->gateway->sentBatches);
+
+        $pen = $this->json($this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04', 'currency' => 'PEN']));
+        self::assertNotSame($usd['ticket'], $pen['ticket']);
+        self::assertSame('PEN', $this->xpathValue($this->gateway->sentBatches[1], 'string(//*[local-name()="TotalAmount"]/@currencyID)'));
+    }
+
+    public function testDailySummaryWithCurrencyWithoutPendingBoletasIsNothingToSummarize(): void
+    {
+        $this->api('POST', '/v1/documents', Payloads::boleta(['submission' => 'DAILY_SUMMARY']));
+
+        $response = $this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04', 'currency' => 'USD']);
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('NOTHING_TO_SUMMARIZE', $this->json($response)['code']);
+        self::assertCount(0, $this->gateway->sentBatches);
+    }
+
+    public function testDailySummaryRejectsAnUnknownCurrency(): void
+    {
+        $response = $this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04', 'currency' => 'EUR']);
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('VALIDATION_ERROR', $this->json($response)['code']);
+    }
+
+    public function testAVoidSummaryIsNotReturnedAsTheDailySummary(): void
+    {
+        $this->api('POST', '/v1/documents', Payloads::boleta());
+        $this->api('POST', '/v1/documents/' . Payloads::BOLETA_ID . '/void', ['reason' => 'x', 'voidDate' => '2026-10-04']);
+
+        $response = $this->api('POST', '/v1/summaries/daily', ['date' => '2026-10-04']);
+
+        self::assertSame(422, $response->getStatusCode());
+        self::assertSame('NOTHING_TO_SUMMARIZE', $this->json($response)['code']);
+    }
+
     public function testRejectedSummaryReleasesBoletasForANewSummary(): void
     {
         $this->api('POST', '/v1/documents', Payloads::boleta(['submission' => 'DAILY_SUMMARY']));
