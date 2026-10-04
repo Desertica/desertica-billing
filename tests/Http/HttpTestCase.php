@@ -21,6 +21,8 @@ abstract class HttpTestCase extends TestCase
     protected FakeSunatGateway $gateway;
     protected FixedClock $clock;
     protected string $storageDir;
+    /** Por defecto un binario que falla al instante: el PDF no se genera y las pruebas corren rápido. */
+    protected string $pdfBinary = 'false';
     /** @var SlimApp<\Psr\Container\ContainerInterface|null> */
     protected SlimApp $app;
 
@@ -54,6 +56,7 @@ abstract class HttpTestCase extends TestCase
             'BILLING_GATEWAY' => 'fake',
             'BILLING_STORAGE_DIR' => $this->storageDir,
             'BILLING_ISSUER_RUC' => '20000000001',
+            'BILLING_WKHTMLTOPDF' => $this->pdfBinary,
         ]);
     }
 

@@ -10,6 +10,13 @@ use Desertica\Billing\Tests\Support\Payloads;
 
 final class EmitDocumentTest extends HttpTestCase
 {
+    protected string $pdfBinary = 'wkhtmltopdf';
+
+    private function hasWkhtmltopdf(): bool
+    {
+        return trim((string) shell_exec('command -v wkhtmltopdf')) !== '';
+    }
+
     public function testEmitsBoletaAndStoresFiles(): void
     {
         $response = $this->api('POST', '/v1/documents', Payloads::boleta());
@@ -24,7 +31,7 @@ final class EmitDocumentTest extends HttpTestCase
         self::assertSame('0', $body['sunatCode']);
         self::assertNotEmpty($body['hash']);
         self::assertNull($body['ticket']);
-        self::assertSame(['xml' => true, 'cdr' => true, 'pdf' => true], $body['files']);
+        self::assertSame(['xml' => true, 'cdr' => true, 'pdf' => $this->hasWkhtmltopdf()], $body['files']);
         self::assertCount(1, $this->gateway->sentDocuments);
     }
 
@@ -213,9 +220,25 @@ final class EmitDocumentTest extends HttpTestCase
         self::assertSame('application/zip', $cdr->getHeaderLine('Content-Type'));
         self::assertStringStartsWith('PK', (string) $cdr->getBody());
 
+        if (!$this->hasWkhtmltopdf()) {
+            return;
+        }
         $pdf = $this->api('GET', $base . 'pdf');
         self::assertSame('application/pdf', $pdf->getHeaderLine('Content-Type'));
         self::assertStringStartsWith('%PDF', (string) $pdf->getBody());
+    }
+
+    public function testPdfFailureDoesNotBreakEmission(): void
+    {
+        // Binario inexistente: el comprobante se emite igual y el PDF queda pendiente.
+        $this->pdfBinary = '/nonexistent/wkhtmltopdf';
+        $this->setUp();
+
+        $body = $this->json($this->api('POST', '/v1/documents', Payloads::boleta()));
+
+        self::assertSame('ACCEPTED', $body['status']);
+        self::assertFalse($body['files']['pdf']);
+        self::assertSame(404, $this->api('GET', '/v1/documents/' . Payloads::BOLETA_ID . '/files/pdf')->getStatusCode());
     }
 
     public function testMissingFileAndUnknownKindAre404(): void
