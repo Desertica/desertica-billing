@@ -66,3 +66,54 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
 - **Datos del emisor** (RUC, razón social, dirección, ubigeo) y las credenciales viven en este servicio (variables de entorno). El contrato
   no los envía.
 - **Entorno explícito:** `BILLING_ENV` es obligatorio (`BETA` o `PRODUCTION`), aparece en `/health`, y `PRODUCTION` exige gateway `greenter`.
+
+## Emisión (M2)
+
+- **Montos.** Todo en enteros (céntimos) con IGV incluido; la tasa se lee como puntos base (`0.1800` → 1800) y no se usan flotantes para calcular.
+  Base imponible de una línea = `round_half_up(total × 10000 / (10000 + tasa))` y el IGV es el resto. El documento **suma las líneas**
+  (no recalcula sobre el total) para que el XML cuadre con lo que SUNAT recomputa por ítem; por eso la base puede diferir en un céntimo de
+  `total / 1.18` cuando hay varias líneas. Pruebas en `tests/Unit/TaxCalculatorTest.php`.
+- **USD.** `exchangeRate` es obligatorio (422 si falta); se valida y se guarda, pero Greenter no lo escribe en el XML de factura o boleta.
+  El PDF y el XML salen en USD.
+- **Idempotencia.** `externalId` es la clave primaria; la fila se inserta antes de firmar o enviar (el INSERT es la puerta contra
+  peticiones concurrentes). Misma petición (comparada por hash canónico, sin importar el orden de las claves) devuelve lo guardado y no
+  reenvía; otro contenido → 409 `IDEMPOTENCY_CONFLICT`; serie+número ya usados por otra `externalId` → 409 `SERIES_NUMBER_IN_USE`.
+- **Reintentos.** Si SUNAT no responde (sin código numérico, p. ej. Bad Gateway) → 502 `retryable: true`, el comprobante queda `PENDING` con su XML firmado
+  y el reintento con la misma `externalId` **reenvía el mismo XML** (nunca se vuelve a firmar algo que SUNAT pudo recibir). Un código de excepción de
+  4 dígitos (0100–1999, FAQ de Greenter) → 422 `SUNAT_EXCEPTION`, estado `ERROR`, y repetir la petición devuelve el mismo 422. Un CDR con
+  código ≠ 0 → 200 con `REJECTED`; código 0 → `ACCEPTED` (las observaciones del CDR se anexan a `sunatMessage`).
+- **Archivos.** XML firmado, CDR y PDF en `BILLING_STORAGE_DIR/<externalId>/`; el PDF (Greenter report + `wkhtmltopdf`) nunca tumba una emisión y se
+  regenera bajo demanda en `GET .../files/pdf`. El «hash» del contrato es el `ds:DigestValue` de la firma.
+- **Datos fijos de línea:** unidad `NIU` y código de producto `T001…` (el contrato no trae unidad ni código). Los ejemplos de Greenter usan `NIU`;
+  para servicios SUNAT admite otros códigos del catálogo 03 (p. ej. `ZZ`), que **no** pude verificar. Preguntar al contador.
+- **Firma y certificado.** `CertificateProvider` lee `.pem` o `.pfx/.p12` desde una ruta montada. Sin ruta (solo con gateway `fake`) genera un certificado
+  autofirmado efímero con `openssl`. `PRODUCTION` exige gateway `greenter`, certificado y SOL.
+- **Pruebas sin red del XML.** Greenter sí permite validar contra el XSD sin conexión con `greenter/ubl-validator` (UBL 2.1 para facturas, boletas y
+  notas; UBL 2.0 para resumen y baja). Se valida además la firma con `SignedXml::verifyXml` y que un XML alterado deje de verificar.
+
+## Baja, resumen y tickets (M3)
+
+- **Baja.** Factura y sus notas → comunicación de baja (`RA-YYYYMMDD-NNNNN`). Boleta y sus notas → resumen diario con estado `3` (`RC-YYYYMMDD-NNN`),
+  como indican los docs de Greenter. Solo se anula un comprobante `ACCEPTED`. El estado pasa a `VOIDED` cuando el ticket queda aceptado; si el ticket
+  se rechaza, el comprobante vuelve a poder anularse. Repetir la baja devuelve el mismo ticket; otro motivo → 409 `VOID_CONFLICT`.
+- **Correlativos de RC y RA.** Los lleva este servicio por día (tabla `batch_sequences`): son documentos propios del servicio, no series de comprobantes
+  (esas son del API y aquí no hay contadores).
+- **Resumen diario.** Incluye las boletas (y notas de boletas) de la fecha con `submission = DAILY_SUMMARY` y estado `ISSUED`. Greenter genera el
+  resumen con **una sola moneda**, así que cada llamada atiende una moneda (PEN primero); llamar de nuevo atiende la siguiente. Si no queda nada
+  pendiente devuelve el último ticket de esa fecha; si nunca hubo, 422 `NOTHING_TO_SUMMARIZE`. Con ticket rechazado las boletas se liberan para
+  un nuevo resumen.
+- **Tickets.** `GET /v1/tickets/{ticket}` consulta a SUNAT mientras esté `PENDING` (código 98 = en proceso; 0 y 99 = procesado, FAQ de Greenter) y
+  actualiza los comprobantes. Los tickets terminados se sirven desde la base sin volver a SUNAT.
+
+## Límites conocidos / no verificado contra SUNAT
+
+- **No se probó contra SUNAT beta**: `e-beta.sunat.gob.pe` está bloqueado en esta sesión. `GreenterSunatGateway` se prueba contra un `See` simulado
+  y `tests/SunatBeta` se activa solo cuando hay credenciales y el host es alcanzable.
+- Clasificación de errores: «código de 4 dígitos = excepción de SUNAT (422); sin código = fallo de conexión (502, reintentable)». Los códigos
+  0100–0199 incluyen errores de autenticación del usuario SOL, que aquí también salen como 422; confirmar con la lista de códigos de SUNAT.
+- Si SUNAT recibió un comprobante pero se perdió la respuesta, el reenvío del mismo XML puede dar el error de «comprobante ya registrado» y el
+  servicio lo tratará como 422. Falta consultar el CDR por `getStatusCdr` (servicio de consulta de CDR, solo producción en Greenter:
+  `SunatEndpoints::FE_CONSULTA_CDR`).
+- Leyenda 2004 «Agencia de Viaje – Paquete turístico» (catálogo 52 de la extracción de terceros): no se emite; puede aplicar al giro de Desertica.
+  Consultar al contador junto con el tratamiento de anticipos (depósito y saldo).
+- `php -S` con workers es el servidor del contenedor (ver «Arquitectura»).

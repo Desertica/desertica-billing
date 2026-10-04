@@ -22,6 +22,20 @@ curl http://127.0.0.1:8080/health
 
 Con `BILLING_GATEWAY=fake` (por defecto) no hay red ni credenciales: SUNAT se simula. Con Docker: `docker compose up --build`.
 
+## Endpoints
+
+Contrato: `openapi/billing.yaml` del repo del API. Todos salvo `/health` exigen `Authorization: Bearer <BILLING_SERVICE_TOKEN>`.
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /health` | Vivo y entorno (`BETA`/`PRODUCTION`) |
+| `POST /v1/documents` | Emite boleta, factura, nota de crédito o de débito (idempotente por `externalId`) |
+| `GET /v1/documents/{externalId}` | Estado del comprobante |
+| `GET /v1/documents/{externalId}/files/{xml\|cdr\|pdf}` | Descarga de archivos |
+| `POST /v1/documents/{externalId}/void` | Baja (comunicación de baja, o resumen con estado anulado para boletas) |
+| `POST /v1/summaries/daily` | Resumen diario de boletas por fecha (una moneda por llamada) |
+| `GET /v1/tickets/{ticket}` | Estado de un ticket de SUNAT |
+
 ## Pruebas y calidad
 
 ```bash
