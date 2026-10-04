@@ -79,17 +79,25 @@ final class BatchService
 
     /**
      * Envía el resumen diario de las boletas (y sus notas) de una fecha que esperan envío. Una llamada atiende
-     * una moneda (PEN primero): Greenter genera el resumen con una sola moneda. Repetir la llamada atiende la siguiente.
+     * una moneda: la indicada en `$currency` o, sin ella, la siguiente pendiente (PEN primero). Greenter genera el
+     * resumen con una sola moneda; repetir la llamada atiende la otra.
      */
-    public function dailySummary(string $date): TicketRecord
+    public function dailySummary(string $date, ?string $currency = null): TicketRecord
     {
         $pending = $this->documents->pendingForSummary($date);
+        if ($currency !== null) {
+            $pending = array_values(array_filter($pending, static fn (DocumentRecord $r) => $r->currency === $currency));
+        }
         if ($pending === []) {
-            $latest = $this->tickets->latestSummary($date);
+            $latest = $this->tickets->latestSummary($date, $currency);
             if ($latest !== null) {
                 return $latest;
             }
-            throw ApiError::unprocessable('NOTHING_TO_SUMMARIZE', sprintf('No hay boletas con envío por resumen diario del %s.', $date));
+            throw ApiError::unprocessable('NOTHING_TO_SUMMARIZE', sprintf(
+                'No hay boletas con envío por resumen diario del %s%s.',
+                $date,
+                $currency === null ? '' : ' en ' . $currency,
+            ));
         }
 
         $currency = $pending[0]->currency;

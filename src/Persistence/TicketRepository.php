@@ -20,12 +20,17 @@ final class TicketRepository
     }
 
     /**
-     * Último resumen enviado para una fecha de emisión y moneda (para responder de nuevo si el API repite la llamada).
+     * Último resumen de altas enviado para una fecha de emisión (y moneda, si se indica), para responder de nuevo si el API repite
+     * la llamada. Los resúmenes que solo anulan boletas (acción `VOID`) no cuentan.
      */
-    public function latestSummary(string $refDate): ?TicketRecord
+    public function latestSummary(string $refDate, ?string $currency = null): ?TicketRecord
     {
-        $stmt = $this->pdo->prepare("SELECT * FROM tickets WHERE kind = 'SUMMARY' AND ref_date = :d ORDER BY created_at DESC, ticket DESC LIMIT 1");
-        $stmt->execute(['d' => $refDate]);
+        $stmt = $this->pdo->prepare(
+            "SELECT t.* FROM tickets t WHERE t.kind = 'SUMMARY' AND t.ref_date = :d AND (:c IS NULL OR t.currency = :c2) "
+            . "AND EXISTS (SELECT 1 FROM ticket_documents d WHERE d.ticket = t.ticket AND d.action = 'ADD') "
+            . 'ORDER BY t.created_at DESC, t.ticket DESC LIMIT 1'
+        );
+        $stmt->execute(['d' => $refDate, 'c' => $currency, 'c2' => $currency]);
         $row = $stmt->fetch();
 
         return is_array($row) ? TicketRecord::fromRow($row) : null;
