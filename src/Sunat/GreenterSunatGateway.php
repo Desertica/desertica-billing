@@ -8,14 +8,59 @@ use Greenter\Model\Response\BillResult;
 use Greenter\Model\Response\Error;
 use Greenter\Model\Response\SummaryResult;
 use Greenter\See;
+use Greenter\Ws\Services\ConsultCdrService;
+use Greenter\Ws\Services\WsdlProvider;
 
 /**
  * Implementación real sobre Greenter (`See`): SOAP a SUNAT beta o producción según el endpoint con que se construyó `See`.
  */
 final class GreenterSunatGateway implements SunatGateway
 {
-    public function __construct(private readonly See $see)
+    /**
+     * @param ConsultCdrService|null $consult servicio `billConsultService` (consulta de CDR); sin él `consultCdr` no consulta
+     */
+    public function __construct(private readonly See $see, private readonly ?ConsultCdrService $consult = null)
     {
+    }
+
+    /**
+     * Construye `See` y el servicio de consulta con clientes SOAP que verifican TLS (ver `VerifiedSoapClient`).
+     *
+     * @param string $billUrl endpoint de envío (`SunatEndpoints::FE_BETA` o `FE_PRODUCCION`)
+     * @param string $consultUrl endpoint de consulta de CDR; vacío = sin consulta
+     */
+    public static function connect(
+        string $certificate,
+        string $ruc,
+        string $solUser,
+        string $solPassword,
+        string $billUrl,
+        string $consultUrl,
+        ?string $caFile = null,
+    ): self {
+        $credentials = $ruc . $solUser;
+
+        $client = new VerifiedSoapClient('', $caFile);
+        $client->setService($billUrl);
+        $client->setCredentials($credentials, $solPassword);
+
+        $see = new See();
+        $see->setCertificate($certificate);
+        // `See` guarda su cliente en una propiedad privada y siempre crea uno con TLS sin verificar: se sustituye.
+        (function () use ($client): void {
+            $this->wsClient = $client;
+        })->call($see);
+
+        $consult = null;
+        if ($consultUrl !== '') {
+            $consultClient = new VerifiedSoapClient(WsdlProvider::getConsultPath(), $caFile);
+            $consultClient->setService($consultUrl);
+            $consultClient->setCredentials($credentials, $solPassword);
+            $consult = new ConsultCdrService();
+            $consult->setClient($consultClient);
+        }
+
+        return new self($see, $consult);
     }
 
     public function sendDocument(string $signedXml): CdrResult
@@ -86,6 +131,33 @@ final class GreenterSunatGateway implements SunatGateway
         }
 
         throw self::exceptionFor($error);
+    }
+
+    public function consultCdr(string $ruc, string $typeCode, string $series, int $number): ?CdrResult
+    {
+        if ($this->consult === null) {
+            return null;
+        }
+
+        $result = $this->call(fn () => $this->consult->getStatusCdr($ruc, $typeCode, $series, $number));
+        if (!$result->isSuccess()) {
+            throw self::exceptionFor($result->getError());
+        }
+
+        $cdr = $result->getCdrResponse();
+        $zip = $result->getCdrZip();
+        // Sin constancia en la respuesta (p. ej. «el comprobante no existe») no hay nada que recuperar.
+        if ($cdr === null || $zip === null || $zip === '') {
+            return null;
+        }
+
+        return new CdrResult(
+            (int) $cdr->getCode() === 0,
+            (string) $cdr->getCode(),
+            (string) $cdr->getDescription(),
+            $zip,
+            array_values(array_map('strval', $cdr->getNotes() ?? [])),
+        );
     }
 
     /**

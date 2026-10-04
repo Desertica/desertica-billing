@@ -20,6 +20,10 @@ final class FakeSunatGateway implements SunatGateway
     private array $ticketQueue = [];
     /** @var list<SunatException> */
     private array $batchQueue = [];
+    /** @var list<CdrResult|SunatException|null> */
+    private array $consultQueue = [];
+    /** @var list<array{ruc: string, type: string, series: string, number: int}> */
+    public array $consultedCdrs = [];
 
     public function enqueueDocumentResult(CdrResult|SunatException $result): void
     {
@@ -34,6 +38,25 @@ final class FakeSunatGateway implements SunatGateway
     public function enqueueTicketStatus(TicketStatus|SunatException $result): void
     {
         $this->ticketQueue[] = $result;
+    }
+
+    /**
+     * Programa lo que responde la siguiente consulta de CDR (`null` = SUNAT no tiene constancia).
+     */
+    public function enqueueCdrConsult(CdrResult|SunatException|null $result): void
+    {
+        $this->consultQueue[] = $result;
+    }
+
+    public function consultCdr(string $ruc, string $typeCode, string $series, int $number): ?CdrResult
+    {
+        $this->consultedCdrs[] = ['ruc' => $ruc, 'type' => $typeCode, 'series' => $series, 'number' => $number];
+        $next = array_shift($this->consultQueue);
+        if ($next instanceof SunatException) {
+            throw $next;
+        }
+
+        return $next;
     }
 
     public function sendDocument(string $signedXml): CdrResult

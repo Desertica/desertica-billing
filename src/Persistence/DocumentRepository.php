@@ -8,7 +8,7 @@ final class DocumentRepository
 {
     private const COLUMNS = [
         'status', 'hash', 'sunat_code', 'sunat_message', 'ticket', 'void_ticket', 'void_reason',
-        'has_xml', 'has_cdr', 'has_pdf',
+        'has_xml', 'has_cdr', 'has_pdf', 'send_attempted',
     ];
 
     public function __construct(private readonly \PDO $pdo)

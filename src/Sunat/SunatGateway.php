@@ -30,4 +30,13 @@ interface SunatGateway
      * @throws SunatException
      */
     public function ticketStatus(string $ticket): TicketStatus;
+
+    /**
+     * Pregunta a SUNAT por el CDR de un comprobante ya enviado (`getStatusCdr`), para recuperar el resultado cuando se perdió
+     * la respuesta del envío. Devuelve `null` si SUNAT no tiene constancia (o si la consulta no está configurada).
+     *
+     * @param string $typeCode código del catálogo 01 (`01` factura, `03` boleta, `07`, `08`)
+     * @throws SunatException si la consulta falla
+     */
+    public function consultCdr(string $ruc, string $typeCode, string $series, int $number): ?CdrResult;
 }
