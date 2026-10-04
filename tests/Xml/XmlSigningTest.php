@@ -11,6 +11,9 @@ use Desertica\Billing\Tests\Support\Payloads;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
 use Greenter\Ubl\UblValidator;
+use Greenter\Ws\Reader\XmlFilenameExtractor;
+use Greenter\Ws\Reader\XmlReader;
+use Greenter\Ws\Resolver\XmlTypeResolver;
 use Greenter\XMLSecLibs\Sunat\SignedXml;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -95,6 +98,11 @@ final class XmlSigningTest extends TestCase
         self::assertTrue($validator->isValid($doc['xml']), 'XSD: ' . $validator->getError());
         self::assertTrue($this->verifies($doc['xml']), 'La firma no verifica.');
         self::assertStringStartsWith('20000000001-' . $typeCode . '-', $doc['name']);
+        // `See::sendXmlFile` (lo que usa el gateway real) deduce tipo y nombre del propio XML: deben coincidir con los nuestros.
+        $reader = new XmlReader();
+        $dom = $reader->parseToDocument($doc['xml']);
+        self::assertSame($doc['name'], (new XmlFilenameExtractor($reader))->getFilename($dom));
+        self::assertNotNull((new XmlTypeResolver($reader))->getType($dom));
         self::assertNotSame('', $doc['hash']);
 
         $xpath = $this->xpath($doc['xml']);

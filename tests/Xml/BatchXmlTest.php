@@ -11,6 +11,11 @@ use Desertica\Billing\Xml\BatchFactory;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
 use Greenter\Ubl\UblValidator;
+use Greenter\Model\Summary\Summary;
+use Greenter\Model\Voided\Voided;
+use Greenter\Ws\Reader\XmlFilenameExtractor;
+use Greenter\Ws\Reader\XmlReader;
+use Greenter\Ws\Resolver\XmlTypeResolver;
 use Greenter\XMLSecLibs\Sunat\SignedXml;
 use PHPUnit\Framework\TestCase;
 
@@ -79,6 +84,7 @@ final class BatchXmlTest extends TestCase
 
         self::assertTrue($validator->isValid($xml), 'XSD: ' . $validator->getError());
         self::assertSame('20000000001-RC-20261005-001', $summary->getName());
+        self::assertSame(Summary::class, $this->resolved($xml, '20000000001-RC-20261005-001'));
         self::assertTrue($this->verifies($xml));
         self::assertStringContainsString('<cbc:AdditionalAccountID>4</cbc:AdditionalAccountID>', $xml);
         self::assertStringContainsString('<cbc:AdditionalAccountID>7</cbc:AdditionalAccountID>', $xml);
@@ -93,8 +99,18 @@ final class BatchXmlTest extends TestCase
 
         self::assertTrue($validator->isValid($xml), 'XSD: ' . $validator->getError());
         self::assertSame('20000000001-RA-20261005-00003', $voided->getName());
+        self::assertSame(Voided::class, $this->resolved($xml, '20000000001-RA-20261005-00003'));
         self::assertTrue($this->verifies($xml));
         self::assertStringContainsString('ERROR EN CÁLCULOS', $xml);
+    }
+
+    private function resolved(string $xml, string $expectedName): ?string
+    {
+        $reader = new XmlReader();
+        $dom = $reader->parseToDocument($xml);
+        self::assertSame($expectedName, (new XmlFilenameExtractor($reader))->getFilename($dom));
+
+        return (new XmlTypeResolver($reader))->getType($dom);
     }
 
     private function verifies(string $xml): bool
