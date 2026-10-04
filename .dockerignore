@@ -11,3 +11,4 @@ docs
 *.pem
 *.p12
 .phpunit.cache
+.phpcs-cache
