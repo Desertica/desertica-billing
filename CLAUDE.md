@@ -39,3 +39,8 @@ permitir `e-beta.sunat.gob.pe` en el entorno y se saltan solas si no es alcanzab
 
 - En sesiones cloud, Composer no puede bajar `phpstan/phpstan` (solo publica zip en api.github.com, bloqueado): usa el phar de
   `raw.githubusercontent.com/phpstan/phpstan/<commit>/phpstan.phar` en `tools/` (ignorado por git) y enlázalo en `vendor/bin/phpstan`.
+- En sesiones cloud Composer no baja **ningún** zip de `api.github.com` (no solo phpstan): usa `composer install --prefer-source` (clona por git) y, para phpstan, el phar de arriba.
+  Si falta `ext-soap`: `apt-get update && apt-get install -y php8.3-soap`.
+- Los hosts de SUNAT (`e-beta`, `e-factura`, `www`) siguen bloqueados en sesiones cloud: el egress responde 403 *después* de completar el TLS, así que `fsockopen` engaña; las pruebas
+  `tests/SunatBeta` piden el WSDL y se saltan solas.
+
