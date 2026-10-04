@@ -19,8 +19,14 @@ final class GreenterSunatGateway implements SunatGateway
     /**
      * @param ConsultCdrService|null $consult servicio `billConsultService` (consulta de CDR); sin él `consultCdr` no consulta
      */
-    public function __construct(private readonly See $see, private readonly ?ConsultCdrService $consult = null)
-    {
+    /**
+     * @param list<string> $secrets valores (usuario y clave SOL) que se tachan de cualquier mensaje de error antes de salir del gateway
+     */
+    public function __construct(
+        private readonly See $see,
+        private readonly ?ConsultCdrService $consult = null,
+        private readonly array $secrets = [],
+    ) {
     }
 
     /**
@@ -60,7 +66,7 @@ final class GreenterSunatGateway implements SunatGateway
             $consult->setClient($consultClient);
         }
 
-        return new self($see, $consult);
+        return new self($see, $consult, array_values(array_filter([$solUser, $solPassword], static fn (string $v): bool => strlen($v) >= 4)));
     }
 
     public function sendDocument(string $signedXml): CdrResult
@@ -70,7 +76,7 @@ final class GreenterSunatGateway implements SunatGateway
             throw new SunatException(null, 'Respuesta inesperada de SUNAT.', true);
         }
         if (!$result->isSuccess()) {
-            throw self::exceptionFor($result->getError());
+            throw $this->sanitized(self::exceptionFor($result->getError()));
         }
 
         $cdr = $result->getCdrResponse();
@@ -95,7 +101,7 @@ final class GreenterSunatGateway implements SunatGateway
             throw new SunatException(null, 'Respuesta inesperada de SUNAT.', true);
         }
         if (!$result->isSuccess()) {
-            throw self::exceptionFor($result->getError());
+            throw $this->sanitized(self::exceptionFor($result->getError()));
         }
         $ticket = $result->getTicket();
         if ($ticket === null || $ticket === '') {
@@ -130,7 +136,7 @@ final class GreenterSunatGateway implements SunatGateway
             return new TicketStatus(TicketStatus::REJECTED, '99', $error?->getMessage(), $status->getCdrZip());
         }
 
-        throw self::exceptionFor($error);
+        throw $this->sanitized(self::exceptionFor($error));
     }
 
     public function consultCdr(string $ruc, string $typeCode, string $series, int $number): ?CdrResult
@@ -141,7 +147,7 @@ final class GreenterSunatGateway implements SunatGateway
 
         $result = $this->call(fn () => $this->consult->getStatusCdr($ruc, $typeCode, $series, $number));
         if (!$result->isSuccess()) {
-            throw self::exceptionFor($result->getError());
+            throw $this->sanitized(self::exceptionFor($result->getError()));
         }
 
         $cdr = $result->getCdrResponse();
@@ -175,6 +181,16 @@ final class GreenterSunatGateway implements SunatGateway
         return new SunatException($code === '' ? null : $code, $message, true);
     }
 
+    private function scrub(string $text): string
+    {
+        return $this->secrets === [] ? $text : str_replace($this->secrets, '***', $text);
+    }
+
+    private function sanitized(SunatException $e): SunatException
+    {
+        return new SunatException($e->sunatCode, $this->scrub($e->getMessage()), $e->retryable);
+    }
+
     /**
      * @template T
      * @param callable(): T $fn
@@ -185,10 +201,10 @@ final class GreenterSunatGateway implements SunatGateway
         try {
             return $fn();
         } catch (\SoapFault $e) {
-            throw new SunatException(null, 'No se pudo conectar con SUNAT: ' . $e->getMessage(), true);
+            throw new SunatException(null, $this->scrub('No se pudo conectar con SUNAT: ' . $e->getMessage()), true);
         } catch (\Exception $e) {
             // `See` lanza excepciones genéricas al descomprimir o al fallar el transporte.
-            throw new SunatException(null, 'Fallo al comunicarse con SUNAT: ' . $e->getMessage(), true);
+            throw new SunatException(null, $this->scrub('Fallo al comunicarse con SUNAT: ' . $e->getMessage()), true);
         }
     }
 }

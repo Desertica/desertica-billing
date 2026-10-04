@@ -10,6 +10,7 @@ use Desertica\Billing\Domain\RequestValidator;
 use Desertica\Billing\Http\Error\ApiError;
 use Desertica\Billing\Persistence\DocumentRecord;
 use Desertica\Billing\Persistence\DocumentRepository;
+use Desertica\Billing\Persistence\LockRepository;
 use Desertica\Billing\Storage\FileStorage;
 use Desertica\Billing\Sunat\CdrResult;
 use Desertica\Billing\Sunat\SunatException;
@@ -27,6 +28,9 @@ use Psr\Log\LoggerInterface;
  */
 final class EmissionService
 {
+    /** Vigencia del cerrojo: más que el máximo de una petición (110 s en php-fpm). */
+    private const LOCK_SECONDS = 130;
+
     public function __construct(
         private readonly DocumentRepository $documents,
         private readonly FileStorage $storage,
@@ -37,6 +41,7 @@ final class EmissionService
         private readonly Clock $clock,
         private readonly string $defaultBoletaSubmission,
         private readonly LoggerInterface $logger,
+        private readonly LockRepository $locks,
         private readonly int $anonymousBoletaMaxCents = 0,
         /** @var list<string> Códigos de excepción de SUNAT que significan «ese comprobante ya está registrado» (recuperar su CDR en vez de fallar). */
         private readonly array $alreadyRegisteredCodes = [],
@@ -136,6 +141,38 @@ final class EmissionService
      * Firma (si aún no hay XML) y envía. Se llama también para reintentar un comprobante `PENDING`.
      */
     private function signAndSubmit(DocumentRecord $record, EmitRequest $request): DocumentRecord
+    {
+        $lock = self::lockName($record->externalId);
+        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+            // Otra petición con la misma externalId está firmando o enviando: no se compite con ella (firmaría un XML distinto).
+            // Se devuelve el estado actual (PENDING); el API consulta `GET /v1/documents/{externalId}` o reintenta.
+            $this->logger->info('emission_in_progress', ['externalId' => $record->externalId]);
+
+            return $this->reload($record->externalId);
+        }
+
+        try {
+            // Con el cerrojo tomado se vuelve a leer: la petición que lo tenía pudo haber terminado entre medias.
+            $current = $this->reload($record->externalId);
+            if ($current->status === DocumentRecord::ERROR) {
+                throw ApiError::unprocessable('SUNAT_EXCEPTION', $current->sunatMessage ?? 'SUNAT no aceptó el comprobante.', $current->sunatCode);
+            }
+            if ($current->status !== DocumentRecord::PENDING) {
+                return $current;
+            }
+
+            return $this->process($current, $request);
+        } finally {
+            $this->locks->release($lock);
+        }
+    }
+
+    public static function lockName(string $externalId): string
+    {
+        return 'doc:' . $externalId;
+    }
+
+    private function process(DocumentRecord $record, EmitRequest $request): DocumentRecord
     {
         $xml = $record->hasXml ? $this->storage->read($record->externalId, FileStorage::XML) : null;
         if ($xml === null) {
