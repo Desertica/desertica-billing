@@ -11,7 +11,6 @@ use Desertica\Billing\Sunat\GreenterSunatGateway;
 use Desertica\Billing\Tests\Support\Payloads;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
-use Greenter\See;
 use Greenter\Ws\Services\SunatEndpoints;
 use PHPUnit\Framework\TestCase;
 
@@ -31,17 +30,21 @@ final class SunatBetaSendTest extends TestCase
         if ($user === false || $user === '' || $password === false || $password === '') {
             self::markTestSkipped('Define SUNAT_BETA_SOL_USER y SUNAT_BETA_SOL_PASSWORD para probar contra SUNAT beta.');
         }
-        $socket = @fsockopen('ssl://e-beta.sunat.gob.pe', 443, $errno, $error, 5);
-        if ($socket === false) {
-            self::markTestSkipped('e-beta.sunat.gob.pe no es alcanzable desde este entorno: ' . $error);
+        // Un cortafuegos de salida puede completar el TLS y luego responder 403: abrir el socket no basta, se pide el WSDL.
+        $probe = @file_get_contents(
+            SunatEndpoints::FE_BETA . '?wsdl',
+            false,
+            stream_context_create(['http' => ['timeout' => 8, 'ignore_errors' => true]]),
+        );
+        $status = isset($http_response_header[0]) && preg_match('#\s(\d{3})\s#', $http_response_header[0], $m) === 1 ? (int) $m[1] : 0;
+        if ($probe === false || $status !== 200) {
+            self::markTestSkipped(sprintf('e-beta.sunat.gob.pe no es alcanzable desde este entorno (HTTP %d).', $status));
         }
-        fclose($socket);
 
         $pem = CertificateProvider::generateTestCertificate();
-        $see = new See();
-        $see->setCertificate($pem);
-        $see->setService(SunatEndpoints::FE_BETA);
-        $see->setClaveSOL('20000000001', $user, $password);
+        // Opcional: URL del servicio de consulta de CDR en beta (`billConsultService`); si no se define no se prueba la consulta.
+        $consultUrl = (string) getenv('SUNAT_BETA_CDR_CONSULT_URL');
+        $gateway = GreenterSunatGateway::connect($pem, '20000000001', $user, $password, SunatEndpoints::FE_BETA, $consultUrl);
 
         $request = (new RequestValidator())->validate(
             Payloads::boleta(['number' => random_int(1, 99999999)]),
@@ -51,9 +54,17 @@ final class SunatBetaSendTest extends TestCase
             ->build($request);
         $signed = (new XmlSigner($pem))->sign($built['document']);
 
-        $cdr = (new GreenterSunatGateway($see))->sendDocument($signed->xml);
+        $cdr = $gateway->sendDocument($signed->xml);
 
         self::assertNotSame('', $cdr->code);
         self::assertNotSame('', $cdr->zip);
+
+        if ($consultUrl !== '') {
+            // No se afirma qué responde SUNAT beta (no está verificado): solo que la consulta se completa y, si hay constancia, la lee.
+            $found = $gateway->consultCdr('20000000001', '03', $request->series, $request->number);
+            if ($found !== null) {
+                self::assertNotSame('', $found->code);
+            }
+        }
     }
 }
