@@ -16,6 +16,12 @@
         <testsuite name="xml">
             <directory>tests/Xml</directory>
         </testsuite>
+        <testsuite name="contract">
+            <directory>tests/Contract</directory>
+        </testsuite>
+        <testsuite name="log">
+            <directory>tests/Log</directory>
+        </testsuite>
         <testsuite name="sunat-beta">
             <directory>tests/SunatBeta</directory>
         </testsuite>
