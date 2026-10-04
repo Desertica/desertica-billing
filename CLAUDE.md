@@ -22,4 +22,20 @@ PHP 8.3, Composer, `greenter/*`, un framework mínimo (Slim). Contenedor propio,
 
 ## Commands
 
-Se completan al crear el esqueleto del servicio (Ola 1). Pruebas sin red: generar y firmar el XML con un certificado de prueba y validarlo contra el XSD. Pruebas con red: envío a SUNAT beta (requiere permitir el host en el entorno).
+```bash
+composer install && cp .env.example .env   # una vez; define BILLING_SERVICE_TOKEN
+composer lint                              # phpcs (PSR-12)
+composer stan                              # phpstan nivel 8
+composer test                              # phpunit, sin red
+composer check                             # lint + stan + test
+php -S 127.0.0.1:8080 -t public public/index.php   # con las variables de .env exportadas
+```
+
+Requiere PHP 8.3 con `soap`, `zip`, `pdo_sqlite` y el binario `wkhtmltopdf` para el PDF. Pruebas sin red: generar y firmar el XML con un
+certificado de prueba (creado en tiempo de ejecución con `openssl`) y validarlo contra el XSD. Pruebas con red: `tests/SunatBeta`, requieren
+permitir `e-beta.sunat.gob.pe` en el entorno y se saltan solas si no es alcanzable. Decisiones y fuentes: `docs/DECISIONS.md`.
+
+## Pitfalls
+
+- En sesiones cloud, Composer no puede bajar `phpstan/phpstan` (solo publica zip en api.github.com, bloqueado): usa el phar de
+  `raw.githubusercontent.com/phpstan/phpstan/<commit>/phpstan.phar` en `tools/` (ignorado por git) y enlázalo en `vendor/bin/phpstan`.
