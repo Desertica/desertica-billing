@@ -14,9 +14,20 @@ final class RequestValidator
 {
     private const UUID = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
     private const MAX_ITEMS = 500;
+    /** Tope por ítem (S/ 1 000 000,00): mantiene toda la aritmética entera lejos del desbordamiento de int64. */
+    private const MAX_ITEM_CENTS = 100_000_000;
+    /** Tope del documento: 500 ítems al máximo. */
+    private const MAX_TOTAL_CENTS = 50_000_000_000;
 
     /** @var list<string> */
     private array $errors = [];
+
+    /**
+     * @param int $anonymousBoletaMaxCents boletas en PEN hasta este monto pueden omitir `customer`; 0 = el receptor siempre es obligatorio
+     */
+    public function __construct(private readonly int $anonymousBoletaMaxCents = 0)
+    {
+    }
 
     /**
      * @param array<mixed> $body
@@ -62,9 +73,9 @@ final class RequestValidator
             }
         }
 
-        $customer = $this->customer($body['customer'] ?? null, $docType);
         $items = $this->items($body['items'] ?? null);
-        $totalCents = $this->int($body, 'totalCents', 1, PHP_INT_MAX);
+        $totalCents = $this->int($body, 'totalCents', 1, self::MAX_TOTAL_CENTS);
+        $customer = $this->customerOrAnonymous($body, $docType, $currency, $totalCents);
         if ($totalCents !== null && $items !== []) {
             $sum = array_sum(array_column($items, 'totalCents'));
             if ($sum !== $totalCents) {
@@ -89,7 +100,7 @@ final class RequestValidator
         }
 
         /** @var DocType $docType */
-        /** @var array{idDocType: string, idDocNumber: string, name: string} $customer */
+        /** @var array{idDocType: string, idDocNumber: string, name: string}|null $customer */
         return new EmitRequest(
             strtolower((string) $externalId),
             $docType,
@@ -166,6 +177,27 @@ final class RequestValidator
     }
 
     /**
+     * El receptor puede omitirse solo en una boleta en PEN cuyo total no supere el tope configurado (0 = nunca).
+     * Si se omite, queda `null` y el XML lleva el receptor genérico.
+     *
+     * @param array<mixed> $body
+     * @return array<string, string>|null
+     */
+    private function customerOrAnonymous(array $body, ?DocType $docType, ?string $currency, ?int $totalCents): ?array
+    {
+        $anonymousAllowed = $this->anonymousBoletaMaxCents > 0
+            && $docType === DocType::Boleta
+            && $currency === 'PEN'
+            && $totalCents !== null
+            && $totalCents <= $this->anonymousBoletaMaxCents;
+        if (!isset($body['customer']) && $anonymousAllowed) {
+            return null;
+        }
+
+        return $this->customer($body['customer'] ?? null, $docType);
+    }
+
+    /**
      * @return array<string, string>|null
      */
     private function customer(mixed $raw, ?DocType $docType): ?array
@@ -232,8 +264,8 @@ final class RequestValidator
             }
             $description = $this->string($item, "items[$i].description", 1, 250, 'description');
             $quantity = $this->int($item, "items[$i].quantity", 1, 1000000, 'quantity');
-            $unit = $this->int($item, "items[$i].unitPriceCents", 1, PHP_INT_MAX, 'unitPriceCents');
-            $total = $this->int($item, "items[$i].totalCents", 1, PHP_INT_MAX, 'totalCents');
+            $unit = $this->int($item, "items[$i].unitPriceCents", 1, self::MAX_ITEM_CENTS, 'unitPriceCents');
+            $total = $this->int($item, "items[$i].totalCents", 1, self::MAX_ITEM_CENTS, 'totalCents');
             if ($quantity !== null && $unit !== null && $total !== null && $quantity * $unit !== $total) {
                 $this->errors[] = sprintf('items[%d].totalCents debe ser quantity × unitPriceCents (%d).', $i, $quantity * $unit);
             }
@@ -301,8 +333,15 @@ final class RequestValidator
 
             return null;
         }
-        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', $value)) {
+        // Caracteres que XML 1.0 no admite: controles (salvo tab, LF y CR) y los no-caracteres U+FFFE y U+FFFF.
+        if (preg_match('/[\x00-\x08\x0B\x0C\x0E-\x1F]|\x{FFFE}|\x{FFFF}/u', $value) === 1) {
             $this->errors[] = sprintf('%s contiene caracteres de control.', $label);
+
+            return null;
+        }
+        // Greenter escribe los textos dentro de CDATA: «]]>» cerraría la sección y rompería el XML firmado.
+        if (str_contains($value, ']]>')) {
+            $this->errors[] = sprintf('%s no puede contener «]]>».', $label);
 
             return null;
         }

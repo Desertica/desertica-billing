@@ -66,11 +66,18 @@ CREATE TABLE IF NOT EXISTS documents (
     has_xml INTEGER NOT NULL DEFAULT 0,
     has_cdr INTEGER NOT NULL DEFAULT 0,
     has_pdf INTEGER NOT NULL DEFAULT 0,
+    send_attempted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (series, number)
 )
 SQL);
+        // Bases creadas antes de `send_attempted`: se añade la columna una sola vez.
+        try {
+            $pdo->exec('ALTER TABLE documents ADD COLUMN send_attempted INTEGER NOT NULL DEFAULT 0');
+        } catch (\PDOException) {
+            // Ya existe.
+        }
         $pdo->exec('CREATE INDEX IF NOT EXISTS documents_summary_idx ON documents (issue_date, submission, status)');
         $pdo->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS tickets (
@@ -92,6 +99,12 @@ CREATE TABLE IF NOT EXISTS ticket_documents (
     external_id TEXT NOT NULL,
     action TEXT NOT NULL,
     PRIMARY KEY (ticket, external_id)
+)
+SQL);
+        $pdo->exec(<<<'SQL'
+CREATE TABLE IF NOT EXISTS locks (
+    name TEXT PRIMARY KEY,
+    until INTEGER NOT NULL
 )
 SQL);
         // Correlativos de los resúmenes diarios (RC) y comunicaciones de baja (RA): los lleva este servicio

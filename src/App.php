@@ -11,9 +11,11 @@ use Desertica\Billing\Http\Controller\DocumentController;
 use Desertica\Billing\Http\Controller\HealthController;
 use Desertica\Billing\Http\Error\ErrorHandler;
 use Desertica\Billing\Http\Middleware\BearerAuthMiddleware;
+use Desertica\Billing\Http\Middleware\RequestLogMiddleware;
 use Desertica\Billing\Log\StderrLogger;
 use Desertica\Billing\Persistence\Database;
 use Desertica\Billing\Persistence\DocumentRepository;
+use Desertica\Billing\Persistence\LockRepository;
 use Desertica\Billing\Persistence\TicketRepository;
 use Desertica\Billing\Security\CertificateProvider;
 use Desertica\Billing\Service\BatchService;
@@ -28,7 +30,6 @@ use Desertica\Billing\Sunat\SunatGateway;
 use Desertica\Billing\Xml\BatchFactory;
 use Desertica\Billing\Xml\DocumentFactory;
 use Desertica\Billing\Xml\XmlSigner;
-use Greenter\See;
 use Greenter\Ws\Services\SunatEndpoints;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
@@ -55,8 +56,9 @@ final class App
         $certificate = self::certificate($settings);
         $gateway ??= self::gateway($settings, $certificate);
         $documents = new DocumentRepository($pdo);
+        $locks = new LockRepository($pdo);
         $storage = new FileStorage($settings->storageDir);
-        $factory = new DocumentFactory($settings->issuer);
+        $factory = new DocumentFactory($settings->issuer, $settings->billing);
         $signer = new XmlSigner($certificate);
         $pdf = new PdfRenderer($settings->wkhtmltopdfBinary, $settings->logoPath, $logger);
 
@@ -70,6 +72,9 @@ final class App
             $clock,
             $settings->boletaSubmission,
             $logger,
+            $locks,
+            $settings->billing->anonymousBoletaMaxCents,
+            $settings->alreadyRegisteredCodes,
         );
         $batches = new BatchService(
             $documents,
@@ -80,16 +85,19 @@ final class App
             $signer,
             $clock,
             $logger,
+            $locks,
         );
         $documentController = new DocumentController($emission);
         $batchController = new BatchController($batches);
 
         $app = AppFactory::create();
-        // Orden de ejecución (el último que se añade corre primero): errores → auth → rutas.
+        // Orden de ejecución (el último que se añade corre primero): log → errores → auth → rutas.
         $app->addRoutingMiddleware();
         $app->add(new BearerAuthMiddleware($settings->serviceToken));
         $errors = $app->addErrorMiddleware(false, false, false, $logger);
         $errors->setDefaultErrorHandler(new ErrorHandler($app->getResponseFactory(), $logger));
+        // El más externo: ve el estado final, también el de las respuestas de error.
+        $app->add(new RequestLogMiddleware($logger));
 
         $app->get('/health', new HealthController($settings->environment));
         $app->post('/v1/documents', [$documentController, 'emit']);
@@ -118,11 +126,14 @@ final class App
             return new FakeSunatGateway();
         }
 
-        $see = new See();
-        $see->setCertificate($certificate);
-        $see->setService($settings->environment === Environment::Production ? SunatEndpoints::FE_PRODUCCION : SunatEndpoints::FE_BETA);
-        $see->setClaveSOL($settings->issuer->ruc, $settings->solUser, $settings->solPassword->reveal());
-
-        return new GreenterSunatGateway($see);
+        return GreenterSunatGateway::connect(
+            $certificate,
+            $settings->issuer->ruc,
+            $settings->solUser,
+            $settings->solPassword->reveal(),
+            $settings->environment === Environment::Production ? SunatEndpoints::FE_PRODUCCION : SunatEndpoints::FE_BETA,
+            $settings->cdrConsultUrl,
+            $settings->sunatCaFile,
+        );
     }
 }

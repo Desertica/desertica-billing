@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Desertica\Billing\Xml;
 
+use Desertica\Billing\Config\BillingOptions;
 use Desertica\Billing\Config\Issuer;
 use Desertica\Billing\Domain\AmountInWords;
 use Desertica\Billing\Domain\Catalogs;
@@ -25,7 +26,7 @@ use Greenter\Model\Sale\SaleDetail;
  */
 final class DocumentFactory
 {
-    public function __construct(private readonly Issuer $issuer)
+    public function __construct(private readonly Issuer $issuer, private readonly BillingOptions $options = new BillingOptions())
     {
     }
 
@@ -70,7 +71,7 @@ final class DocumentFactory
             $line = $totals['lines'][$i];
             $details[] = (new SaleDetail())
                 ->setCodProducto(sprintf('T%03d', $i + 1))
-                ->setUnidad(Catalogs::UNIT)
+                ->setUnidad($this->options->unitCode)
                 ->setCantidad($item['quantity'])
                 ->setDescripcion($item['description'])
                 ->setMtoBaseIgv((float) TaxCalculator::money($line['taxableCents']))
@@ -83,13 +84,15 @@ final class DocumentFactory
                 ->setMtoPrecioUnitario((float) TaxCalculator::money($item['unitPriceCents']));
         }
 
-        $document
-            ->setDetails($details)
-            ->setLegends([
-                (new Legend())
-                    ->setCode(Catalogs::LEGEND_AMOUNT_IN_WORDS)
-                    ->setValue(AmountInWords::format($totals['totalCents'], $request->currency)),
-            ]);
+        $legends = [
+            (new Legend())
+                ->setCode(Catalogs::LEGEND_AMOUNT_IN_WORDS)
+                ->setValue(AmountInWords::format($totals['totalCents'], $request->currency)),
+        ];
+        if ($this->options->travelAgencyLegend && $request->isFor(DocType::Boleta, DocType::Factura)) {
+            $legends[] = (new Legend())->setCode(Catalogs::LEGEND_TRAVEL_AGENCY)->setValue(Catalogs::LEGEND_TRAVEL_AGENCY_TEXT);
+        }
+        $document->setDetails($details)->setLegends($legends);
 
         return [
             'document' => $document,
@@ -97,6 +100,11 @@ final class DocumentFactory
             'igvCents' => $totals['igvCents'],
             'totalCents' => $totals['totalCents'],
         ];
+    }
+
+    public function issuerRuc(): string
+    {
+        return $this->issuer->ruc;
     }
 
     public function company(): Company
@@ -120,6 +128,13 @@ final class DocumentFactory
     private function client(EmitRequest $request): Client
     {
         $customer = $request->customer;
+        if ($customer === null) {
+            // Boleta sin receptor (solo si BILLING_ANONYMOUS_BOLETA_MAX_CENTS lo permite y el monto está por debajo).
+            return (new Client())
+                ->setTipoDoc(Catalogs::ID_TYPE_NONE)
+                ->setNumDoc(Catalogs::ANONYMOUS_NUMBER)
+                ->setRznSocial(Catalogs::ANONYMOUS_NAME);
+        }
         $client = (new Client())
             ->setTipoDoc(Catalogs::ID_TYPES[$customer['idDocType']])
             ->setNumDoc($customer['idDocNumber'])

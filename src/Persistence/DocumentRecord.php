@@ -37,6 +37,8 @@ final class DocumentRecord
         public readonly bool $hasXml,
         public readonly bool $hasCdr,
         public readonly bool $hasPdf,
+        /** El XML llegó a enviarse alguna vez a SUNAT (aunque la respuesta se perdiera). */
+        public readonly bool $sendAttempted = false,
     ) {
     }
 
@@ -71,6 +73,7 @@ final class DocumentRecord
             (bool) $row['has_xml'],
             (bool) $row['has_cdr'],
             (bool) $row['has_pdf'],
+            (bool) ($row['send_attempted'] ?? false),
         );
     }
 
@@ -81,17 +84,22 @@ final class DocumentRecord
      */
     public function toResult(): array
     {
-        return [
+        $result = [
             'externalId' => $this->externalId,
             'status' => $this->status,
             'taxableCents' => $this->taxableCents,
             'igvCents' => $this->igvCents,
             'totalCents' => $this->totalCents,
-            'hash' => $this->hash,
             'sunatCode' => $this->sunatCode,
             'sunatMessage' => $this->sunatMessage,
             'ticket' => $this->ticket,
             'files' => ['xml' => $this->hasXml, 'cdr' => $this->hasCdr, 'pdf' => $this->hasPdf],
         ];
+        // El contrato define `hash` como string (no nulo): sin firma todavía se omite.
+        if ($this->hash !== null) {
+            $result['hash'] = $this->hash;
+        }
+
+        return $result;
     }
 }

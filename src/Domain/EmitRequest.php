@@ -11,7 +11,7 @@ final class EmitRequest
 {
     /**
      * @param list<array{description: string, quantity: int, unitPriceCents: int, totalCents: int}> $items
-     * @param array{idDocType: string, idDocNumber: string, name: string, address?: string, email?: string} $customer
+     * @param array{idDocType: string, idDocNumber: string, name: string, address?: string, email?: string}|null $customer `null` solo en boletas por debajo del tope configurado
      * @param array{docType: string, series: string, number: int}|null $affectedDocument
      */
     public function __construct(
@@ -23,7 +23,7 @@ final class EmitRequest
         public readonly string $currency,
         public readonly ?string $exchangeRate,
         public readonly string $igvRate,
-        public readonly array $customer,
+        public readonly ?array $customer,
         public readonly array $items,
         public readonly int $totalCents,
         public readonly ?string $submission,

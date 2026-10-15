@@ -35,8 +35,10 @@
   },
   "require-dev": {
     "greenter/ubl-validator": "^2.3",
+    "opis/json-schema": "^2.6",
     "phpstan/phpstan": "^2",
     "phpunit/phpunit": "^11",
-    "squizlabs/php_codesniffer": "^3.10"
+    "squizlabs/php_codesniffer": "^3.10",
+    "symfony/yaml": "^7.4"
   }
 }
