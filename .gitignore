@@ -1,0 +1,13 @@
+vendor/
+tools/
+.env
+.env.*
+!.env.example
+var/
+*.pfx
+*.pem
+*.p12
+.phpunit.cache/
+.phpunit.result.cache
+.phpcs-cache
+coverage/
