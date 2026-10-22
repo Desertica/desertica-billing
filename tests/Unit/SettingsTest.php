@@ -119,6 +119,42 @@ final class SettingsTest extends TestCase
         $this->production($overrides, ...$without);
     }
 
+    public function testSecretsCanComeFromFiles(): void
+    {
+        $dir = sys_get_temp_dir() . '/billing-secrets-' . bin2hex(random_bytes(4));
+        mkdir($dir);
+        file_put_contents($dir . '/token', self::TOKEN . "\n");
+        file_put_contents($dir . '/sol', 'sol-from-file');
+        file_put_contents($dir . '/cert', 'cert-from-file');
+
+        try {
+            $settings = Settings::fromEnv([
+                'BILLING_ENV' => 'BETA', 'BILLING_SERVICE_TOKEN_FILE' => $dir . '/token', 'BILLING_GATEWAY' => 'greenter',
+                'BILLING_CERT_PATH' => '/run/secrets/cert.pem', 'BILLING_CERT_PASSWORD_FILE' => $dir . '/cert',
+                'BILLING_SOL_USER' => 'U', 'BILLING_SOL_PASSWORD_FILE' => $dir . '/sol',
+            ]);
+        } finally {
+            array_map('unlink', glob($dir . '/*') ?: []);
+            rmdir($dir);
+        }
+
+        self::assertSame(self::TOKEN, $settings->serviceToken->reveal());
+        self::assertSame('sol-from-file', $settings->solPassword->reveal());
+        self::assertSame('cert-from-file', $settings->certPassword->reveal());
+    }
+
+    public function testRejectsAnUnreadableSecretFile(): void
+    {
+        $this->expectException(ConfigException::class);
+        Settings::fromEnv(['BILLING_ENV' => 'BETA', 'BILLING_SERVICE_TOKEN_FILE' => '/nonexistent/token']);
+    }
+
+    public function testRejectsASecretGivenBothWays(): void
+    {
+        $this->expectException(ConfigException::class);
+        Settings::fromEnv(['BILLING_ENV' => 'BETA', 'BILLING_SERVICE_TOKEN' => self::TOKEN, 'BILLING_SERVICE_TOKEN_FILE' => __FILE__]);
+    }
+
     public function testBetaKeepsTheTestIssuerDefaults(): void
     {
         self::assertSame('20000000001', $this->env()->issuer->ruc);

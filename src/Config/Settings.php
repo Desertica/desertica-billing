@@ -69,11 +69,28 @@ final class Settings
             return $value;
         };
 
+        // Secretos: el valor directo (KEY) o un archivo montado (KEY_FILE, p. ej. Docker/Kubernetes secrets); nunca ambos.
+        $secret = static function (string $key, ?string $default = null) use ($env, $get): string {
+            $file = $env[$key . '_FILE'] ?? null;
+            if (!is_string($file) || $file === '') {
+                return $get($key, $default);
+            }
+            if (isset($env[$key]) && $env[$key] !== '') {
+                throw new ConfigException(sprintf('Define %s o %s_FILE, no ambas.', $key, $key));
+            }
+            $value = is_file($file) ? file_get_contents($file) : false;
+            if ($value === false) {
+                throw new ConfigException(sprintf('No se pudo leer el archivo de %s_FILE.', $key));
+            }
+
+            return rtrim($value, "\r\n");
+        };
+
         $envName = $get('BILLING_ENV');
         $environment = Environment::tryFrom($envName)
             ?? throw new ConfigException('BILLING_ENV debe ser BETA o PRODUCTION.');
 
-        $token = $get('BILLING_SERVICE_TOKEN');
+        $token = $secret('BILLING_SERVICE_TOKEN');
         if (strlen($token) < 32) {
             throw new ConfigException('BILLING_SERVICE_TOKEN debe tener al menos 32 caracteres.');
         }
@@ -93,7 +110,7 @@ final class Settings
 
         $certPath = $get('BILLING_CERT_PATH', '');
         $solUser = $get('BILLING_SOL_USER', '');
-        $solPassword = $get('BILLING_SOL_PASSWORD', '');
+        $solPassword = $secret('BILLING_SOL_PASSWORD', '');
         if ($gateway === 'greenter' && ($certPath === '' || $solUser === '' || $solPassword === '')) {
             throw new ConfigException(
                 'Con BILLING_GATEWAY=greenter hacen falta BILLING_CERT_PATH, BILLING_SOL_USER y BILLING_SOL_PASSWORD.'
@@ -158,7 +175,7 @@ final class Settings
             $get('BILLING_STORAGE_DIR', 'var/storage'),
             $boletaSubmission,
             $certPath,
-            new Secret($get('BILLING_CERT_PASSWORD', '')),
+            new Secret($secret('BILLING_CERT_PASSWORD', '')),
             $solUser,
             new Secret($solPassword),
             $issuer,
