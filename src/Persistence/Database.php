@@ -16,7 +16,7 @@ final class Database
     {
         if (str_starts_with($dsn, 'sqlite:') && !str_contains($dsn, ':memory:')) {
             $dir = dirname(substr($dsn, 7));
-            if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
                 throw new \RuntimeException('No se pudo crear el directorio de la base de datos.');
             }
         }

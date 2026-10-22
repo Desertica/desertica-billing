@@ -9,6 +9,9 @@ use Desertica\Billing\Persistence\Database;
 
 require __DIR__ . '/../vendor/autoload.php';
 
+// Todo lo que se crea (base SQLite, XML, CDR, PDF) es solo del usuario del servicio.
+umask(0077);
+
 // Se ejecuta antes de aceptar tráfico: si la configuración o el certificado no sirven, el contenedor no arranca.
 try {
     $settings = Settings::fromEnv(getenv());

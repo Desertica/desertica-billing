@@ -24,12 +24,12 @@ final class FileStorage
     {
         $path = $this->path($externalId, $kind);
         $dir = dirname($path);
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
             throw new \RuntimeException('No se pudo crear el directorio de almacenamiento.');
         }
         // Escritura atómica: nunca se ve un archivo a medias.
         $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
-        if (file_put_contents($tmp, $content) === false || !rename($tmp, $path)) {
+        if (file_put_contents($tmp, $content) === false || !chmod($tmp, 0600) || !rename($tmp, $path)) {
             @unlink($tmp);
             throw new \RuntimeException('No se pudo escribir el archivo.');
         }
