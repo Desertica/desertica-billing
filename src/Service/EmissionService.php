@@ -295,12 +295,8 @@ final class EmissionService
         $record = $this->get($externalId);
         $content = $this->storage->read($externalId, $kind);
         if ($content === null && $kind === FileStorage::PDF && $record->hasXml) {
-            // Se rehidrata una petición ya aceptada: el tope de boleta sin receptor no debe volver a rechazarla.
-            $request = (new RequestValidator(PHP_INT_MAX))->validate(
-                json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR),
-                new \DateTimeImmutable($record->issueDate . ' 23:59:59', new \DateTimeZone('America/Lima')),
-            );
-            $this->renderPdf($record, $request);
+            // Se rehidrata la petición ya aceptada, sin validarla de nuevo con las reglas (tope, fecha, catálogos) de hoy.
+            $this->renderPdf($record, EmitRequest::fromArray(json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR)));
             $content = $this->storage->read($externalId, FileStorage::PDF);
         }
 

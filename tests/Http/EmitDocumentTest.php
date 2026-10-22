@@ -241,6 +241,33 @@ final class EmitDocumentTest extends HttpTestCase
         self::assertSame(404, $this->api('GET', '/v1/documents/' . Payloads::BOLETA_ID . '/files/pdf')->getStatusCode());
     }
 
+    public function testRegeneratedPdfDoesNotRevalidateTheStoredRequestWithTodaysRules(): void
+    {
+        if (!$this->hasWkhtmltopdf()) {
+            self::markTestSkipped('wkhtmltopdf no está disponible.');
+        }
+        $pdo = new \PDO('sqlite::memory:');
+        $emit = fn (string $binary) => \Desertica\Billing\App::create(
+            $this->settings(['BILLING_WKHTMLTOPDF' => $binary]),
+            new \Psr\Log\NullLogger(),
+            $this->gateway,
+            $this->clock,
+            $pdo,
+        );
+        $this->app = $emit('/nonexistent/wkhtmltopdf');
+        $this->api('POST', '/v1/documents', Payloads::boleta());
+        // Una regla posterior (aquí, notes ≤ 1000 caracteres) habría rechazado lo que se aceptó antes: el PDF no debe depender de ella.
+        $stored = json_decode((string) $pdo->query('SELECT request_json FROM documents')->fetchColumn(), true, 512, JSON_THROW_ON_ERROR);
+        $stored['notes'] = str_repeat('n', 1001);
+        $pdo->prepare('UPDATE documents SET request_json = ?')->execute([json_encode($stored, JSON_THROW_ON_ERROR)]);
+
+        $this->app = $emit('wkhtmltopdf');
+        $pdf = $this->api('GET', '/v1/documents/' . Payloads::BOLETA_ID . '/files/pdf');
+
+        self::assertSame(200, $pdf->getStatusCode());
+        self::assertStringStartsWith('%PDF', (string) $pdf->getBody());
+    }
+
     public function testMissingFileAndUnknownKindAre404(): void
     {
         $this->api('POST', '/v1/documents', Payloads::boleta(['submission' => 'DAILY_SUMMARY']));
