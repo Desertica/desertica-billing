@@ -35,6 +35,39 @@ final class EmitRequest
     }
 
     /**
+     * Rehidrata una petición ya validada y guardada (`toArray()`), sin volver a validarla: las reglas de hoy no deben cambiar
+     * lo que se aceptó ayer.
+     *
+     * @param array{
+     *     externalId: string, docType: string, series: string, number: int, issueDate: string, currency: string, exchangeRate?: string,
+     *     igvRate: string, customer?: array{idDocType: string, idDocNumber: string, name: string, address?: string, email?: string},
+     *     items: list<array{description: string, quantity: int, unitPriceCents: int, totalCents: int}>, totalCents: int, submission?: string,
+     *     affectedDocument?: array{docType: string, series: string, number: int}, reasonCode?: string, reason?: string, notes?: string
+     * } $data
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            $data['externalId'],
+            DocType::from($data['docType']),
+            $data['series'],
+            $data['number'],
+            $data['issueDate'],
+            $data['currency'],
+            $data['exchangeRate'] ?? null,
+            $data['igvRate'],
+            $data['customer'] ?? null,
+            $data['items'],
+            $data['totalCents'],
+            $data['submission'] ?? null,
+            $data['affectedDocument'] ?? null,
+            $data['reasonCode'] ?? null,
+            $data['reason'] ?? null,
+            $data['notes'] ?? null,
+        );
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toArray(): array

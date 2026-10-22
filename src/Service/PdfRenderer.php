@@ -38,7 +38,14 @@ final class PdfRenderer
                 'page-width' => '21cm',
                 'page-height' => '29.7cm',
                 'disable-javascript',
+                // El HTML lleva el logo en línea (data URI): wkhtmltopdf no necesita leer archivos locales (el HTML de entrada sí se carga).
+                'disable-local-file-access',
             ]);
+            // El proceso no hereda el entorno: ahí están el token de servicio, la clave SOL y la del certificado.
+            $exporter = $report->getExporter();
+            if ($exporter !== null) {
+                $exporter->commandOptions = ['procEnv' => ['PATH' => (string) (getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin')]];
+            }
             $pdf = $report->render($document, [
                 'system' => ['logo' => $logo, 'hash' => $hash],
                 'user' => ['header' => '', 'extras' => $extras, 'footer' => ''],

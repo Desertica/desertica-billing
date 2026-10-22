@@ -10,6 +10,9 @@ use Desertica\Billing\Log\StderrLogger;
 
 require __DIR__ . '/../vendor/autoload.php';
 
+// Todo lo que se crea (base SQLite, XML, CDR, PDF) es solo del usuario del servicio.
+umask(0077);
+
 try {
     $settings = Settings::fromEnv(getenv());
 } catch (ConfigException $e) {
