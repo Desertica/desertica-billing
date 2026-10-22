@@ -1,48 +1,28 @@
-# Proteger ramas en GitHub (guia para principiantes)
+# Ramas y CI
 
-Objetivo: nadie sube codigo directo a `main` ni a `develop`; todo entra por Pull Request (PR) con los checks en verde. Este repo maneja el certificado digital y la clave SOL, asi que esto es importante.
+| Rama | Para qué | Quién escribe en ella |
+| --- | --- | --- |
+| `main` | Base del repo. No se despliega. | Nadie (no se toca). |
+| `develop` | Desarrollo. Aquí entra todo el trabajo. | PR desde `feat/*`, `fix/*`, `chore/*`. |
+| `staging` | Pruebas. Es lo que se despliega en staging. | PR solo desde `develop`. |
+| `prod` | Producción. Es lo que se despliega en producción. | PR solo desde `staging`. |
 
-## Antes de empezar
+Las demás ramas son de trabajo: se borran al mezclar el PR.
 
-1. Copia el workflow: `docs/pipelines/ci.yml` a `.github/workflows/ci.yml` (crea la carpeta si no existe), commit y push. Sin esto los checks no existen.
-2. Crea el secreto `GITLEAKS_LICENSE` (el repo es de una organizacion, gitleaks lo exige): consigue una clave gratuita en https://gitleaks.io, luego Settings -> Secrets and variables -> Actions -> New repository secret, nombre `GITLEAKS_LICENSE`.
-3. Abre un PR de prueba para que los checks corran al menos una vez; GitHub solo deja elegir checks que ya se han ejecutado.
+## Qué comprueba el CI
 
-Los checks se llaman exactamente: `secretos` y `php`.
+Todo corre en cada PR hacia `develop`, `staging` o `prod` y en cada push a esas tres ramas. Checks obligatorios en las tres ramas:
 
-## Ramas que se protegen
+| Workflow | Check | Qué comprueba |
+| --- | --- | --- |
+| `ci.yml` | `check`, `docker` | Lo propio del repo (ver `.github/workflows/ci.yml`) y que la imagen Docker construye. |
+| `security.yml` | `secrets`, `audit` | Secretos en el historial (reglas en `.gitleaks.toml` si existe), dependencias de producción con vulnerabilidad alta. Corre también cada lunes. |
+| `policy.yml` | `flow`, `commits`, `tracked-files` | Orden develop → staging → prod; commits sin `Co-Authored-By` ni autores bot (solo PR a `develop`); nada de `.env`, `.cursor/`, `.vscode/`, certificados ni basura del sistema en git. |
 
-Ramas reales del repo hoy: `main` (por defecto), `develop`. Las demas (`claude/*`, `feat/*`) son ramas de trabajo temporales y no se protegen. Si mas adelante se crean ramas permanentes (por ejemplo `release/*`), se agregan igual.
+## Protección en GitHub
 
-## Pasos (repetir para `main` y para `develop`)
+Ruleset activo en `develop`, `staging` y `prod`: PR obligatorio, checks de arriba obligatorios y al día, sin force-push ni borrado. No exige aprobaciones porque hoy hay una sola persona; añade `required_approving_review_count: 1` cuando haya más.
 
-1. En GitHub abre el repo `Desertica/desertica-billing` -> **Settings** -> **Branches**.
-2. En "Branch protection rules" pulsa **Add branch ruleset** (o **Add classic branch protection rule** si ves esa opcion; abajo se usan los nombres de la regla clasica).
-3. En "Branch name pattern" escribe `main` (luego repite con `develop`).
-4. Marca **Require a pull request before merging**.
-   - **Required approvals**: 1 (con 2 personas en el equipo, la otra persona revisa).
-   - Marca **Dismiss stale pull request approvals when new commits are pushed**.
-5. Marca **Require status checks to pass before merging** y **Require branches to be up to date before merging**.
-6. En el buscador de checks agrega: `secretos` y `php` (nombres exactos).
-7. Marca **Require conversation resolution before merging**.
-8. Marca **Do not allow bypassing the above settings** (tambien aplica a admins) y deja **Allow force pushes** y **Allow deletions** SIN marcar.
-9. Pulsa **Create** / **Save changes**.
+## Despliegue
 
-## Comprobar que funciona
-
-Intenta `git push origin main` directo: debe rechazarlo. Abre un PR: el boton Merge debe quedar bloqueado hasta que `secretos` y `php` esten en verde.
-
-## Que hacer si `secretos` falla
-
-- "certificado versionado" / ".env versionado" / "clave privada versionada": quita el archivo del PR. Si ya se subio a algun commit, el secreto esta comprometido: avisa de inmediato para revocar el certificado o cambiar la clave SOL; borrar el archivo despues no basta.
-- Falla de gitleaks: lee el reporte del job; si es un falso positivo, se agrega a `.gitleaksignore` (nunca se desactiva el check).
-
-## Requisitos del esqueleto PHP
-
-Para que `php` proteja de verdad, el esqueleto debe incluir `phpstan/phpstan` con nivel 6 o mayor (`phpstan.neon.dist`) y un estandar de estilo PSR-12 (`squizlabs/php_codesniffer` con `phpcs.xml.dist`, o `php-cs-fixer`), con los scripts de composer `lint` y `analyse`. El CI invoca las herramientas directamente; si faltan, esos pasos se omiten en silencio con un mensaje.
-
-El workflow corre en cada push y en cada PR (cualquier rama); un push nuevo cancela la ejecucion anterior de la misma rama.
-
-## Nota
-
-`php` termina en verde con un mensaje cuando todavia no hay `composer.json`; en cuanto aparece, ejecuta `composer validate --strict`, `install`, `audit`, phpstan (si esta en composer.json) y phpunit (si hay `phpunit.xml(.dist)`).
+Coolify construye desde Git: la app de staging sigue `staging` y la de producción sigue `prod` (Auto Deploy). El CI no despliega ni publica imágenes.
