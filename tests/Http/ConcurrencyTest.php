@@ -36,7 +36,8 @@ final class ConcurrencyTest extends HttpTestCase
     public function testEmissionInProgressIsNotRaced(): void
     {
         // Otra petición tiene el cerrojo del comprobante: la fila existe pero este proceso no firma ni envía.
-        $this->locks->acquire(EmissionService::lockName(Payloads::FACTURA_ID), $this->now(), 130);
+        $owner = $this->locks->acquire(EmissionService::lockName(Payloads::FACTURA_ID), $this->now(), 130);
+        self::assertNotNull($owner);
 
         $busy = $this->api('POST', '/v1/documents', Payloads::factura());
 
@@ -46,7 +47,7 @@ final class ConcurrencyTest extends HttpTestCase
         self::assertFalse($this->json($busy)['files']['xml']);
 
         // Al soltarse, la siguiente llamada completa la emisión una sola vez.
-        $this->locks->release(EmissionService::lockName(Payloads::FACTURA_ID));
+        $this->locks->release(EmissionService::lockName(Payloads::FACTURA_ID), $owner);
         $done = $this->json($this->api('POST', '/v1/documents', Payloads::factura()));
         self::assertSame('ACCEPTED', $done['status']);
         self::assertCount(1, $this->gateway->sentDocuments);
@@ -77,7 +78,7 @@ final class ConcurrencyTest extends HttpTestCase
         $this->gateway->enqueueDocumentResult(new SunatException(null, 'timeout', true));
         self::assertSame(502, $this->api('POST', '/v1/documents', Payloads::factura())->getStatusCode());
 
-        self::assertTrue($this->locks->acquire(EmissionService::lockName(Payloads::FACTURA_ID), $this->now(), 130));
+        self::assertNotNull($this->locks->acquire(EmissionService::lockName(Payloads::FACTURA_ID), $this->now(), 130));
     }
 
     public function testVoidWhileTheDocumentIsBusyIsAConflict(): void
@@ -106,10 +107,24 @@ final class ConcurrencyTest extends HttpTestCase
 
     public function testLockRepositoryAcquireReleaseAndExpiry(): void
     {
-        self::assertTrue($this->locks->acquire('x', 100, 10));
-        self::assertFalse($this->locks->acquire('x', 105, 10));
-        self::assertTrue($this->locks->acquire('x', 110, 10), 'Caducó en el segundo 110.');
-        $this->locks->release('x');
-        self::assertTrue($this->locks->acquire('x', 111, 10));
+        $first = $this->locks->acquire('x', 100, 10);
+        self::assertNotNull($first);
+        self::assertNull($this->locks->acquire('x', 105, 10));
+        $second = $this->locks->acquire('x', 110, 10);
+        self::assertNotNull($second, 'Caducó en el segundo 110.');
+        $this->locks->release('x', $second);
+        self::assertNotNull($this->locks->acquire('x', 111, 10));
+    }
+
+    public function testAnExpiredHolderCannotReleaseTheNewOwnersLock(): void
+    {
+        $slow = $this->locks->acquire('x', 100, 10);
+        $new = $this->locks->acquire('x', 110, 10);
+        self::assertNotNull($slow);
+        self::assertNotNull($new);
+
+        $this->locks->release('x', $slow);
+
+        self::assertNull($this->locks->acquire('x', 111, 10), 'El cerrojo del nuevo propietario sigue vigente.');
     }
 }

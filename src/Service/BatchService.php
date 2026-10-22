@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace Desertica\Billing\Service;
 
-use Desertica\Billing\Domain\DocType;
+use Desertica\Billing\Domain\Catalogs;
+use Desertica\Billing\Domain\EmitRequest;
 use Desertica\Billing\Http\Error\ApiError;
 use Desertica\Billing\Persistence\DocumentRecord;
 use Desertica\Billing\Persistence\DocumentRepository;
@@ -49,13 +50,14 @@ final class BatchService
 
         // Mismo cerrojo que la emisión: no se anula un comprobante mientras se firma/envía, ni dos bajas a la vez.
         $lock = EmissionService::lockName($externalId);
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             throw ApiError::conflict('VOID_CONFLICT', 'Hay otra operación en curso sobre este comprobante; reintenta en unos segundos.');
         }
         try {
             return $this->voidLocked($externalId, $reason, $voidDate);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 
@@ -82,9 +84,9 @@ final class BatchService
         }
 
         $day = str_replace('-', '', $voidDate);
-        if ($this->concernsBoleta($record)) {
+        if (EmitRequest::fromArray(json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR))->concernsBoleta()) {
             $sequence = $this->tickets->nextSequence('RC', $day);
-            $document = $this->factory->summary([$record], $record->currency, $record->issueDate, $voidDate, $sequence, '3');
+            $document = $this->factory->summary([$record], $record->currency, $record->issueDate, $voidDate, $sequence, Catalogs::SUMMARY_VOID);
             $kind = TicketRecord::SUMMARY;
         } else {
             $sequence = $this->tickets->nextSequence('RA', $day);
@@ -106,14 +108,15 @@ final class BatchService
     public function dailySummary(string $date, ?string $currency = null): TicketRecord
     {
         $lock = 'summary:' . $date;
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             // Dos resúmenes simultáneos de la misma fecha mandarían las mismas boletas dos veces.
             throw ApiError::upstream('Ya hay un resumen de esa fecha en curso; reintenta en unos segundos.');
         }
         try {
             return $this->dailySummaryLocked($date, $currency);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 
@@ -193,7 +196,7 @@ final class BatchService
             throw ApiError::unprocessable('SUNAT_EXCEPTION', $e->getMessage(), $e->sunatCode);
         }
 
-        $this->storage->writeTicketXml($ticketId, $signed->xml);
+        $this->storage->writeTicketFile($ticketId, FileStorage::XML, $signed->xml);
         $record = new TicketRecord($ticketId, $kind, $signed->fileName, $refDate, $currency, TicketStatus::PENDING, null, null);
         $this->tickets->create($record, $links, $this->now());
 
@@ -204,7 +207,7 @@ final class BatchService
     {
         $now = $this->now();
         if ($cdrZip !== null && $cdrZip !== '') {
-            $this->storage->write('tickets/' . preg_replace('/[^A-Za-z0-9._-]/', '_', $ticket->ticket), FileStorage::CDR, $cdrZip);
+            $this->storage->writeTicketFile($ticket->ticket, FileStorage::CDR, $cdrZip);
         }
         $this->tickets->updateStatus($ticket->ticket, $state, $code, $message, $now);
 
@@ -241,16 +244,6 @@ final class BatchService
         }
 
         return $ticket;
-    }
-
-    private function concernsBoleta(DocumentRecord $record): bool
-    {
-        if ($record->docType === DocType::Boleta->value) {
-            return true;
-        }
-        $request = json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR);
-
-        return is_array($request) && ($request['affectedDocument']['docType'] ?? null) === DocType::Boleta->value;
     }
 
     private function now(): string
