@@ -1,0 +1,44 @@
+{
+  "name": "desertica/desertica-billing",
+  "description": "Servicio interno de facturación electrónica SUNAT de Desertica",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.3",
+    "ext-dom": "*",
+    "ext-openssl": "*",
+    "ext-pdo": "*",
+    "ext-soap": "*",
+    "ext-zip": "*",
+    "greenter/htmltopdf": "^5.3",
+    "greenter/lite": "^5.3",
+    "greenter/report": "^5.3",
+    "slim/psr7": "^1.8",
+    "slim/slim": "^4.15"
+  },
+  "autoload": {
+    "psr-4": { "Desertica\\Billing\\": "src/" }
+  },
+  "autoload-dev": {
+    "psr-4": { "Desertica\\Billing\\Tests\\": "tests/" }
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  },
+  "scripts": {
+    "lint": "phpcs",
+    "lint:fix": "phpcbf",
+    "stan": "phpstan analyse --memory-limit=512M",
+    "test": "phpunit",
+    "check": ["@lint", "@stan", "@test"]
+  },
+  "require-dev": {
+    "greenter/ubl-validator": "^2.3",
+    "opis/json-schema": "^2.6",
+    "phpstan/phpstan": "^2",
+    "phpunit/phpunit": "^11",
+    "squizlabs/php_codesniffer": "^3.10",
+    "symfony/yaml": "^7.4"
+  }
+}

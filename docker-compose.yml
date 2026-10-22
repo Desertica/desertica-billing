@@ -1,0 +1,23 @@
+# Desarrollo: gateway fake (sin red) y entorno BETA. No hay certificado ni credenciales reales aquí.
+services:
+  billing:
+    build: .
+    environment:
+      BILLING_ENV: BETA
+      BILLING_GATEWAY: fake
+      BILLING_SERVICE_TOKEN: ${BILLING_SERVICE_TOKEN:?define BILLING_SERVICE_TOKEN (mínimo 32 caracteres) en tu shell o en .env}
+      BILLING_STORAGE_DIR: /var/lib/billing
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - billing-data:/var/lib/billing
+    # Endurecimiento: sin escritura fuera del volumen y de los tmpfs, sin privilegios.
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10001,gid=10001
+      - /run/billing:uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 130s
+volumes:
+  billing-data:

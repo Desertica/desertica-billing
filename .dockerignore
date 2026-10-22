@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.example
+vendor
+tools
+var
+tests
+docs
+*.pfx
+*.pem
+*.p12
+.phpunit.cache
+.phpcs-cache

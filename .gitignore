@@ -1,3 +1,11 @@
+vendor/
+tools/
+var/
+.phpunit.cache/
+.phpunit.result.cache
+.phpcs-cache
+coverage/
+
 # Secretos: certificado digital, clave SOL y variables de entorno nunca se versionan.
 .env
 .env.*
