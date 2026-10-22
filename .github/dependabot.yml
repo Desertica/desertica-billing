@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: composer
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      composer: {patterns: ["*"]}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      actions: {patterns: ["*"]}
+  # Dockerfile existe en develop; sin Dockerfile en la raiz Dependabot solo avisa.
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      docker: {patterns: ["*"]}

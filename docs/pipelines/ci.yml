@@ -1,0 +1,84 @@
+# Copiar a .github/workflows/ci.yml (ver docs/PROTECCION-RAMAS.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  secretos:
+    name: secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Falla si hay un archivo de secreto versionado. .env.example se permite.
+      - name: Archivos de secreto
+        run: |
+          bad=0
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              *.pfx|*.p12) echo "::error file=$f::certificado versionado"; bad=1 ;;
+              .env|*/.env|.env.*|*/.env.*)
+                case "$f" in *.example) ;; *) echo "::error file=$f::.env versionado"; bad=1 ;; esac ;;
+              *.pem|*.key)
+                if grep -qE -- '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' "$f"; then
+                  echo "::error file=$f::clave privada versionada"; bad=1
+                fi ;;
+            esac
+          done < <(git ls-files -z)
+          exit $bad
+      # Org de GitHub: requiere el secreto GITLEAKS_LICENSE (clave gratuita en gitleaks.io).
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  php:
+    name: php
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detectar composer.json
+        id: d
+        run: |
+          if [ -f composer.json ]; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Sin composer.json: no hay codigo PHP que comprobar todavia. Job en verde a proposito."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+      - if: steps.d.outputs.has == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: dom, openssl, pdo, soap, zip
+          tools: composer:v2
+      - if: steps.d.outputs.has == 'true'
+        run: composer validate --strict
+      - if: steps.d.outputs.has == 'true'
+        run: composer install --no-interaction --prefer-dist
+      - if: steps.d.outputs.has == 'true'
+        run: composer audit
+      - name: phpstan
+        if: steps.d.outputs.has == 'true'
+        run: |
+          if grep -q '"phpstan/phpstan"' composer.json; then
+            vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+          else
+            echo "phpstan no esta en composer.json: se omite."
+          fi
+      - name: phpunit
+        if: steps.d.outputs.has == 'true'
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            vendor/bin/phpunit
+          else
+            echo "Sin phpunit.xml(.dist): se omiten las pruebas."
+          fi

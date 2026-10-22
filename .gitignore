@@ -1,0 +1,9 @@
+# Secretos: certificado digital, clave SOL y variables de entorno nunca se versionan.
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+certs/
