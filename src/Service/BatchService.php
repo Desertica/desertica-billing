@@ -50,13 +50,14 @@ final class BatchService
 
         // Mismo cerrojo que la emisión: no se anula un comprobante mientras se firma/envía, ni dos bajas a la vez.
         $lock = EmissionService::lockName($externalId);
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             throw ApiError::conflict('VOID_CONFLICT', 'Hay otra operación en curso sobre este comprobante; reintenta en unos segundos.');
         }
         try {
             return $this->voidLocked($externalId, $reason, $voidDate);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 
@@ -107,14 +108,15 @@ final class BatchService
     public function dailySummary(string $date, ?string $currency = null): TicketRecord
     {
         $lock = 'summary:' . $date;
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             // Dos resúmenes simultáneos de la misma fecha mandarían las mismas boletas dos veces.
             throw ApiError::upstream('Ya hay un resumen de esa fecha en curso; reintenta en unos segundos.');
         }
         try {
             return $this->dailySummaryLocked($date, $currency);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 

@@ -143,7 +143,8 @@ final class EmissionService
     private function signAndSubmit(DocumentRecord $record, EmitRequest $request): DocumentRecord
     {
         $lock = self::lockName($record->externalId);
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             // Otra petición con la misma externalId está firmando o enviando: no se compite con ella (firmaría un XML distinto).
             // Se devuelve el estado actual (PENDING); el API consulta `GET /v1/documents/{externalId}` o reintenta.
             $this->logger->info('emission_in_progress', ['externalId' => $record->externalId]);
@@ -163,7 +164,7 @@ final class EmissionService
 
             return $this->process($current, $request);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 

@@ -10,7 +10,7 @@ namespace Desertica\Billing\Persistence;
  */
 final class Database
 {
-    private const VERSION = 1;
+    private const VERSION = 2;
 
     public static function connect(string $dsn): \PDO
     {
@@ -126,9 +126,16 @@ SQL);
         $pdo->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS locks (
     name TEXT PRIMARY KEY,
-    until INTEGER NOT NULL
+    until INTEGER NOT NULL,
+    owner TEXT NOT NULL DEFAULT ''
 )
 SQL);
+        // Bases creadas antes de `owner` (versión 2): se añade la columna una sola vez.
+        try {
+            $pdo->exec("ALTER TABLE locks ADD COLUMN owner TEXT NOT NULL DEFAULT ''");
+        } catch (\PDOException) {
+            // Ya existe.
+        }
         // Correlativos de los resúmenes diarios (RC) y comunicaciones de baja (RA): los lleva este servicio
         // porque son documentos propios, no series de comprobantes (esas son del API).
         $pdo->exec(<<<'SQL'

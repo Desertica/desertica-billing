@@ -13,7 +13,7 @@ final class DatabaseTest extends TestCase
     {
         $pdo = new \PDO('sqlite::memory:');
         Database::prepare($pdo);
-        self::assertSame(1, (int) $pdo->query('SELECT MAX(version) FROM schema_version')?->fetchColumn());
+        self::assertSame(2, (int) $pdo->query('SELECT MAX(version) FROM schema_version')?->fetchColumn());
 
         // Con la versión al día, una nueva preparación no vuelve a ejecutar el esquema.
         $pdo->exec('DROP TABLE locks');
@@ -30,8 +30,11 @@ final class DatabaseTest extends TestCase
             . 'sunat_message TEXT, ticket TEXT, void_ticket TEXT, void_reason TEXT, has_xml INTEGER NOT NULL DEFAULT 0, has_cdr INTEGER NOT NULL DEFAULT 0, '
             . 'has_pdf INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (series, number))');
 
+        $pdo->exec('CREATE TABLE locks (name TEXT PRIMARY KEY, until INTEGER NOT NULL)');
+
         Database::prepare($pdo);
 
+        self::assertContains('owner', array_column($pdo->query('PRAGMA table_info(locks)')?->fetchAll(\PDO::FETCH_ASSOC) ?: [], 'name'));
         $columns = array_column($pdo->query('PRAGMA table_info(documents)')?->fetchAll(\PDO::FETCH_ASSOC) ?: [], 'name');
         self::assertContains('send_attempted', $columns);
     }

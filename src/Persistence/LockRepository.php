@@ -19,28 +19,33 @@ final class LockRepository
     /**
      * @param int $now segundos Unix
      * @param int $ttl segundos de vigencia; debe superar el tiempo máximo de una petición
+     * @return string|null el token del propietario (hay que devolverlo a `release`), o `null` si el cerrojo está tomado
      */
-    public function acquire(string $name, int $now, int $ttl): bool
+    public function acquire(string $name, int $now, int $ttl): ?string
     {
+        $owner = bin2hex(random_bytes(8));
         // Primero se intenta tomar un cerrojo caducado; si no existe fila, se inserta (la clave primaria decide quién gana).
-        $take = $this->pdo->prepare('UPDATE locks SET until = :until WHERE name = :name AND until <= :now');
-        $take->execute(['until' => $now + $ttl, 'name' => $name, 'now' => $now]);
+        $take = $this->pdo->prepare('UPDATE locks SET until = :until, owner = :owner WHERE name = :name AND until <= :now');
+        $take->execute(['until' => $now + $ttl, 'owner' => $owner, 'name' => $name, 'now' => $now]);
         if ($take->rowCount() === 1) {
-            return true;
+            return $owner;
         }
 
         try {
-            $this->pdo->prepare('INSERT INTO locks (name, until) VALUES (:name, :until)')
-                ->execute(['name' => $name, 'until' => $now + $ttl]);
+            $this->pdo->prepare('INSERT INTO locks (name, until, owner) VALUES (:name, :until, :owner)')
+                ->execute(['name' => $name, 'until' => $now + $ttl, 'owner' => $owner]);
         } catch (\PDOException) {
-            return false;
+            return null;
         }
 
-        return true;
+        return $owner;
     }
 
-    public function release(string $name): void
+    /**
+     * Solo suelta el cerrojo si sigue siendo del propietario: si caducó y otra petición lo tomó, no se lo quita.
+     */
+    public function release(string $name, string $owner): void
     {
-        $this->pdo->prepare('DELETE FROM locks WHERE name = :name')->execute(['name' => $name]);
+        $this->pdo->prepare('DELETE FROM locks WHERE name = :name AND owner = :owner')->execute(['name' => $name, 'owner' => $owner]);
     }
 }
