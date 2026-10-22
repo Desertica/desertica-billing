@@ -37,4 +37,4 @@ jobs:
         with:
           php-version: '8.3'
           tools: composer:v2
-      - run: composer audit
+      - run: composer audit --locked

@@ -13,7 +13,7 @@ FROM php:8.3-fpm-bookworm
 # hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends nginx libxml2-dev libzip-dev wkhtmltopdf fontconfig fonts-dejavu-core \
-    && docker-php-ext-install soap zip pdo_sqlite opcache \
+    && docker-php-ext-install soap zip opcache \
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled /etc/nginx/conf.d /usr/local/etc/php-fpm.d \
     && groupadd --system --gid 10001 billing && useradd --system --uid 10001 --gid billing --home-dir /app billing \
     && mkdir -p /var/lib/billing /run/billing /tmp/nginx \
