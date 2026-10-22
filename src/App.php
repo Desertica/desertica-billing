@@ -110,10 +110,13 @@ final class App
         return $app;
     }
 
-    private static function certificate(Settings $settings): string
+    /**
+     * Certificado de firma, validado (vigencia, clave, RUC). Lo usa también `bin/startup.php` para fallar al arrancar.
+     */
+    public static function certificate(Settings $settings): string
     {
         if ($settings->certPath !== '') {
-            return CertificateProvider::fromFile($settings->certPath, $settings->certPassword);
+            return CertificateProvider::fromFile($settings->certPath, $settings->certPassword, $settings->issuer->ruc);
         }
 
         // Sin certificado configurado solo se llega con gateway fake (Settings lo exige para greenter): certificado efímero de prueba.

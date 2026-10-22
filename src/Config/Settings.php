@@ -11,6 +11,9 @@ use Greenter\Ws\Services\SunatEndpoints;
  */
 final class Settings
 {
+    private const TEST_RUC = '20000000001';
+    private const PLACEHOLDER_LEGAL_NAME = 'DESERTICA SAC';
+
     public function __construct(
         public readonly Environment $environment,
         public readonly Secret $serviceToken,
@@ -124,6 +127,29 @@ final class Settings
             }
         }
 
+        // En PRODUCTION el emisor se declara entero: sin valores por defecto y sin los de prueba.
+        $production = $environment === Environment::Production;
+        $issuerValue = static fn (string $key, string $default): string => $production ? $get($key) : $get($key, $default);
+        $issuer = new Issuer(
+            $issuerValue('BILLING_ISSUER_RUC', self::TEST_RUC),
+            $issuerValue('BILLING_ISSUER_LEGAL_NAME', self::PLACEHOLDER_LEGAL_NAME),
+            $issuerValue('BILLING_ISSUER_TRADE_NAME', 'DESERTICA'),
+            $issuerValue('BILLING_ISSUER_ADDRESS', '-'),
+            $issuerValue('BILLING_ISSUER_UBIGEO', '150101'),
+            $issuerValue('BILLING_ISSUER_DEPARTMENT', 'LIMA'),
+            $issuerValue('BILLING_ISSUER_PROVINCE', 'LIMA'),
+            $issuerValue('BILLING_ISSUER_DISTRICT', 'LIMA'),
+            $issuerValue('BILLING_ISSUER_LOCAL_CODE', '0000'),
+        );
+        if ($production) {
+            if (preg_match('/^\d{11}$/', $issuer->ruc) !== 1 || $issuer->ruc === self::TEST_RUC) {
+                throw new ConfigException('En PRODUCTION BILLING_ISSUER_RUC debe ser el RUC real (11 dígitos), no el de prueba.');
+            }
+            if (in_array($issuer->legalName, ['-', self::PLACEHOLDER_LEGAL_NAME], true) || $issuer->address === '-') {
+                throw new ConfigException('En PRODUCTION BILLING_ISSUER_LEGAL_NAME y BILLING_ISSUER_ADDRESS deben ser los datos reales, no los de ejemplo.');
+            }
+        }
+
         return new self(
             $environment,
             new Secret($token),
@@ -135,17 +161,7 @@ final class Settings
             new Secret($get('BILLING_CERT_PASSWORD', '')),
             $solUser,
             new Secret($solPassword),
-            new Issuer(
-                $get('BILLING_ISSUER_RUC', '20000000001'),
-                $get('BILLING_ISSUER_LEGAL_NAME', 'DESERTICA SAC'),
-                $get('BILLING_ISSUER_TRADE_NAME', 'DESERTICA'),
-                $get('BILLING_ISSUER_ADDRESS', '-'),
-                $get('BILLING_ISSUER_UBIGEO', '150101'),
-                $get('BILLING_ISSUER_DEPARTMENT', 'LIMA'),
-                $get('BILLING_ISSUER_PROVINCE', 'LIMA'),
-                $get('BILLING_ISSUER_DISTRICT', 'LIMA'),
-                $get('BILLING_ISSUER_LOCAL_CODE', '0000'),
-            ),
+            $issuer,
             $get('BILLING_WKHTMLTOPDF', 'wkhtmltopdf'),
             $get('BILLING_LOGO_PATH', ''),
             new BillingOptions($unitCode, $legend === 'true', (int) $anonymousMax),

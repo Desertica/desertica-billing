@@ -61,6 +61,69 @@ final class SettingsTest extends TestCase
         self::assertStringNotContainsString('sol-password-xyz', $dump);
     }
 
+    private const PRODUCTION_ISSUER = [
+        'BILLING_ISSUER_RUC' => '20123456789',
+        'BILLING_ISSUER_LEGAL_NAME' => 'EMPRESA REAL SAC',
+        'BILLING_ISSUER_TRADE_NAME' => 'EMPRESA',
+        'BILLING_ISSUER_ADDRESS' => 'AV. REAL 123',
+        'BILLING_ISSUER_UBIGEO' => '150101',
+        'BILLING_ISSUER_DEPARTMENT' => 'LIMA',
+        'BILLING_ISSUER_PROVINCE' => 'LIMA',
+        'BILLING_ISSUER_DISTRICT' => 'LIMA',
+        'BILLING_ISSUER_LOCAL_CODE' => '0000',
+    ];
+
+    /**
+     * @param array<string, string> $overrides
+     */
+    private function production(array $overrides = [], string ...$without): Settings
+    {
+        $env = $overrides + self::PRODUCTION_ISSUER + [
+            'BILLING_ENV' => 'PRODUCTION', 'BILLING_SERVICE_TOKEN' => self::TOKEN, 'BILLING_GATEWAY' => 'greenter',
+            'BILLING_CERT_PATH' => '/run/secrets/cert.pem', 'BILLING_SOL_USER' => 'U', 'BILLING_SOL_PASSWORD' => 'p',
+        ];
+        foreach ($without as $key) {
+            unset($env[$key]);
+        }
+
+        return Settings::fromEnv($env);
+    }
+
+    public function testProductionAcceptsAFullyDeclaredIssuer(): void
+    {
+        self::assertSame('20123456789', $this->production()->issuer->ruc);
+    }
+
+    /**
+     * @return iterable<string, array{array<string, string>, list<string>}>
+     */
+    public static function invalidProductionIssuers(): iterable
+    {
+        yield 'RUC de prueba' => [['BILLING_ISSUER_RUC' => '20000000001'], []];
+        yield 'RUC mal formado' => [['BILLING_ISSUER_RUC' => '123'], []];
+        yield 'razón social de ejemplo' => [['BILLING_ISSUER_LEGAL_NAME' => 'DESERTICA SAC'], []];
+        yield 'dirección de ejemplo' => [['BILLING_ISSUER_ADDRESS' => '-'], []];
+        foreach (array_keys(self::PRODUCTION_ISSUER) as $key) {
+            yield 'falta ' . $key => [[], [$key]];
+        }
+    }
+
+    /**
+     * @param array<string, string> $overrides
+     * @param list<string> $without
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidProductionIssuers')]
+    public function testProductionRejectsMissingOrPlaceholderIssuer(array $overrides, array $without): void
+    {
+        $this->expectException(ConfigException::class);
+        $this->production($overrides, ...$without);
+    }
+
+    public function testBetaKeepsTheTestIssuerDefaults(): void
+    {
+        self::assertSame('20000000001', $this->env()->issuer->ruc);
+    }
+
     /**
      * @param array<string, string> $extra
      */
@@ -116,7 +179,7 @@ final class SettingsTest extends TestCase
         $production = Settings::fromEnv([
             'BILLING_ENV' => 'PRODUCTION', 'BILLING_SERVICE_TOKEN' => self::TOKEN, 'BILLING_GATEWAY' => 'greenter',
             'BILLING_CERT_PATH' => '/run/secrets/cert.pem', 'BILLING_SOL_USER' => 'U', 'BILLING_SOL_PASSWORD' => 'p',
-        ]);
+        ] + self::PRODUCTION_ISSUER);
 
         self::assertSame('', $this->env()->cdrConsultUrl);
         self::assertSame('https://e-factura.sunat.gob.pe/ol-it-wsconscpegem/billConsultService', $production->cdrConsultUrl);

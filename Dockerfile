@@ -26,6 +26,7 @@ WORKDIR /app
 COPY --from=vendor /app/vendor ./vendor
 COPY src ./src
 COPY public ./public
+COPY bin ./bin
 COPY composer.json ./
 ENV BILLING_STORAGE_DIR=/var/lib/billing
 USER 10001:10001
