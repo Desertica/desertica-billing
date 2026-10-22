@@ -23,11 +23,6 @@ final class Secret
         return ($this->reveal)();
     }
 
-    public function isEmpty(): bool
-    {
-        return $this->reveal() === '';
-    }
-
     public function __toString(): string
     {
         return '***';

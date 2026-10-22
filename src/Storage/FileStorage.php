@@ -46,9 +46,9 @@ final class FileStorage
         return $content === false ? null : $content;
     }
 
-    public function writeTicketXml(string $ticket, string $xml): void
+    public function writeTicketFile(string $ticket, string $kind, string $content): void
     {
-        $this->write('tickets/' . self::safe($ticket), self::XML, $xml);
+        $this->write('tickets/' . self::safe($ticket), $kind, $content);
     }
 
     private function path(string $externalId, string $kind): string
