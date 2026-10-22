@@ -12,16 +12,22 @@ use Greenter\See;
  */
 final class XmlSigner
 {
-    private readonly See $see;
+    private ?See $see = null;
 
-    public function __construct(string $certificatePem)
+    /**
+     * @param string|\Closure(): string $certificatePem PEM, o quien lo entrega: se pide al firmar, no al construir
+     */
+    public function __construct(private readonly string|\Closure $certificatePem)
     {
-        $this->see = new See();
-        $this->see->setCertificate($certificatePem);
     }
 
     public function sign(DocumentInterface $document): SignedXml
     {
+        if ($this->see === null) {
+            $see = new See();
+            $see->setCertificate(is_string($this->certificatePem) ? $this->certificatePem : ($this->certificatePem)());
+            $this->see = $see;
+        }
         $xml = $this->see->getXmlSigned($document);
         if ($xml === null || $xml === '') {
             throw new \RuntimeException('Greenter no pudo generar o firmar el XML.');

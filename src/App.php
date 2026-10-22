@@ -26,6 +26,7 @@ use Desertica\Billing\Service\SystemClock;
 use Desertica\Billing\Storage\FileStorage;
 use Desertica\Billing\Sunat\FakeSunatGateway;
 use Desertica\Billing\Sunat\GreenterSunatGateway;
+use Desertica\Billing\Sunat\LazySunatGateway;
 use Desertica\Billing\Sunat\SunatGateway;
 use Desertica\Billing\Xml\BatchFactory;
 use Desertica\Billing\Xml\DocumentFactory;
@@ -38,6 +39,8 @@ use Slim\Factory\AppFactory;
 
 final class App
 {
+    private static ?string $testCertificate = null;
+
     /**
      * @return SlimApp<ContainerInterface|null>
      */
@@ -53,8 +56,9 @@ final class App
         $pdo ??= Database::connect($settings->dbDsn);
         Database::prepare($pdo);
 
-        $certificate = self::certificate($settings);
-        $gateway ??= self::gateway($settings, $certificate);
+        // El certificado y el gateway se resuelven al usarlos: /health y las lecturas no pagan por ellos.
+        $certificate = static fn (): string => self::certificate($settings);
+        $gateway ??= new LazySunatGateway(static fn (): SunatGateway => self::gateway($settings, $certificate()));
         $documents = new DocumentRepository($pdo);
         $locks = new LockRepository($pdo);
         $storage = new FileStorage($settings->storageDir);
@@ -119,8 +123,9 @@ final class App
             return CertificateProvider::fromFile($settings->certPath, $settings->certPassword, $settings->issuer->ruc);
         }
 
-        // Sin certificado configurado solo se llega con gateway fake (Settings lo exige para greenter): certificado efímero de prueba.
-        return CertificateProvider::generateTestCertificate();
+        // Sin certificado configurado solo se llega con gateway fake (Settings lo exige para greenter): certificado efímero de
+        // prueba, uno por proceso (generar una RSA de 2048 bits en cada petición costaba cientos de ms).
+        return self::$testCertificate ??= CertificateProvider::generateTestCertificate();
     }
 
     private static function gateway(Settings $settings, string $certificate): SunatGateway
