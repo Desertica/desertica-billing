@@ -205,6 +205,12 @@ servicio de bajo volumen. Coste asumido: dos procesos en el contenedor (un scrip
   uid 10001): `/health`, 401, emisión con gateway simulado, descarga del XML, 400, 413, parada con SIGTERM y salida del script cuando muere php-fpm.
   Sin comprobar: `docker build`, el nombre del paquete `nginx` y de `wkhtmltopdf` en Debian bookworm, y que runc deje stderr a nombre del usuario del contenedor
   (necesario para `error_log = /proc/self/fd/2`; en esta sesión se emuló).
+- **Timeouts.** Cada llamada SOAP a SUNAT tiene límites explícitos en `VerifiedSoapClient`: conexión 10 s y lectura 30 s (se fija `default_socket_timeout` por llamada, porque
+  `SoapClient` no tiene otra opción). Una emisión hace como máximo dos llamadas (consulta de CDR + envío): (10 + 30) × 2 = 80 s < `request_terminate_timeout` 110 s,
+  y el cerrojo (130 s) caduca después de ambos y de `fastcgi_read_timeout` de nginx (120 s). Si se cambia un valor, revisar la cadena entera.
+- **Arranque.** El esquema se migra una sola vez (`schema_version`; las peticiones solo leen esa tabla), el certificado y el gateway se cargan al primer uso y el certificado de
+  prueba del gateway `fake` se genera una vez por proceso. `/health` pasó de ~280 ms a ~2 ms en local. `bin/startup.php` (lo ejecuta el entrypoint antes de nginx y php-fpm) valida la
+  configuración, prepara la base y valida el certificado (vigencia, clave que corresponde, RUC del certificado si lo declara): si algo falla, el contenedor no arranca.
 - SQLite con varios procesos de php-fpm: WAL y `busy_timeout` 5 s; con 8 procesos máximo y poco volumen es suficiente. Si crece, usar `BILLING_DB_DSN` con otro motor.
 
 ## Revisión adversarial del diff (Ola 2)
