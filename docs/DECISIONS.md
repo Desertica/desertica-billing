@@ -65,9 +65,10 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
   desarrollo local (README). Sin DI container: el cableado es manual en `App::create`.
 - **Datos del emisor** (RUC, razón social, dirección, ubigeo) y las credenciales viven en este servicio (variables de entorno). El contrato
   no los envía.
-- **Entorno explícito:** `BILLING_ENV` es obligatorio (`BETA` o `PRODUCTION`), aparece en `/health`, y `PRODUCTION` exige gateway `greenter`.
+- **Entorno explícito:** `BILLING_ENV` es obligatorio (`BETA` o `PRODUCTION`), aparece en `/health`, y `PRODUCTION` exige gateway `greenter` y todas las `BILLING_ISSUER_*` declaradas,
+  distintas del RUC de prueba `20000000001`, de la razón social `DESERTICA SAC` (ejemplo) y de la dirección `-`; en `BETA` conservan esos valores por defecto. Con gateway `fake`, SUNAT se simula y se acepta todo, también en BETA.
 
-## Emisión (M2)
+## Emisión
 
 - **Montos.** Todo en enteros (céntimos) con IGV incluido; la tasa se lee como puntos base (`0.1800` → 1800) y no se usan flotantes para calcular.
   Base imponible de una línea = `round_half_up(total × 10000 / (10000 + tasa))` y el IGV es el resto. El documento **suma las líneas**
@@ -79,19 +80,21 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
   peticiones concurrentes). Misma petición (comparada por hash canónico, sin importar el orden de las claves) devuelve lo guardado y no
   reenvía; otro contenido → 409 `IDEMPOTENCY_CONFLICT`; serie+número ya usados por otra `externalId` → 409 `SERIES_NUMBER_IN_USE`.
 - **Reintentos.** Si SUNAT no responde (sin código numérico, p. ej. Bad Gateway) → 502 `retryable: true`, el comprobante queda `PENDING` con su XML firmado
-  y el reintento con la misma `externalId` **reenvía el mismo XML** (nunca se vuelve a firmar algo que SUNAT pudo recibir). Un código de excepción de
-  4 dígitos (0100–1999, FAQ de Greenter) → 422 `SUNAT_EXCEPTION`, estado `ERROR`, y repetir la petición devuelve el mismo 422. Un CDR con
+  y el reintento con la misma `externalId` **reenvía el mismo XML** (nunca se vuelve a firmar algo que SUNAT pudo recibir). Un código numérico de
+  4 dígitos (cualquiera: `GreenterSunatGateway::exceptionFor` solo comprueba el formato `^\d{4}$`, no un rango; la FAQ de Greenter habla de 0100–1999) → 422 `SUNAT_EXCEPTION`, estado `ERROR`, y repetir la petición devuelve el mismo 422. Un CDR con
   código ≠ 0 → 200 con `REJECTED`; código 0 → `ACCEPTED` (las observaciones del CDR se anexan a `sunatMessage`).
 - **Archivos.** XML firmado, CDR y PDF en `BILLING_STORAGE_DIR/<externalId>/`; el PDF (Greenter report + `wkhtmltopdf`) nunca tumba una emisión y se
   regenera bajo demanda en `GET .../files/pdf`. El «hash» del contrato es el `ds:DigestValue` de la firma.
 - **Datos fijos de línea:** unidad `NIU` y código de producto `T001…` (el contrato no trae unidad ni código). Los ejemplos de Greenter usan `NIU`;
   para servicios SUNAT admite otros códigos del catálogo 03 (p. ej. `ZZ`), que **no** pude verificar. Preguntar al contador.
-- **Firma y certificado.** `CertificateProvider` lee `.pem` o `.pfx/.p12` desde una ruta montada. Sin ruta (solo con gateway `fake`) genera un certificado
-  autofirmado efímero con `openssl`. `PRODUCTION` exige gateway `greenter`, certificado y SOL.
+- **Firma y certificado.** `CertificateProvider` lee `.pem` o `.pfx/.p12` desde una ruta montada y lo valida (`openssl_x509_parse`: vigencia; `openssl_x509_check_private_key`: la clave
+  corresponde; si el sujeto declara un RUC, debe ser el del emisor). Sin ruta (solo con gateway `fake`) genera un certificado autofirmado efímero, uno por proceso.
+  `PRODUCTION` exige gateway `greenter`, certificado y SOL; `bin/startup.php` falla al arrancar si algo no sirve. No verificado: el formato real del sujeto de los certificados de
+  los proveedores peruanos; si no declara el RUC como «RUC 20…» o como `serialNumber` de 11 dígitos, esa comprobación simplemente no se aplica.
 - **Pruebas sin red del XML.** Greenter sí permite validar contra el XSD sin conexión con `greenter/ubl-validator` (UBL 2.1 para facturas, boletas y
   notas; UBL 2.0 para resumen y baja). Se valida además la firma con `SignedXml::verifyXml` y que un XML alterado deje de verificar.
 
-## Baja, resumen y tickets (M3)
+## Baja, resumen y tickets
 
 - **Baja.** Factura y sus notas → comunicación de baja (`RA-YYYYMMDD-NNNNN`). Boleta y sus notas → resumen diario con estado `3` (`RC-YYYYMMDD-NNN`),
   como indican los docs de Greenter. Solo se anula un comprobante `ACCEPTED`. El estado pasa a `VOIDED` cuando el ticket queda aceptado; si el ticket
@@ -116,7 +119,7 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
 - Tratamiento de anticipos (depósito y saldo): sigue pendiente de consultar al contador. Las otras decisiones del contador (unidad, leyenda 2004,
   boleta sin receptor) ya son configuración: ver «Decisiones del contador».
 
-## Contrato reconciliado (Ola 2)
+## Contrato reconciliado
 
 - Copia sin modificar del contrato en `openapi/billing.yaml` (origen y commit en `openapi/README.md`). Cada respuesta de cada prueba HTTP se valida contra él
   (`tests/Contract/ContractValidator`, con `opis/json-schema`): una respuesta con un estado que la operación no documenta, un código fuera del `enum`
@@ -199,12 +202,14 @@ servicio de bajo volumen. Coste asumido: dos procesos en el contenedor (un scrip
   `StderrLogger`; los avisos/excepciones de PHP pasan por el mismo logger (`PhpErrorLogging`, sin trazas) y `zend.exception_ignore_args=On`. nginx no registra accesos
   (`access_log off`); su log de errores y el de php-fpm van a stderr **en texto**, no JSON (nginx y php-fpm no lo soportan sin más).
 - **Parada ordenada:** SIGTERM → SIGQUIT a ambos (terminan las peticiones en curso, p. ej. un envío a SUNAT); `stop_grace_period: 130s` en el compose.
-- **Variables:** `clear_env = no` para que `BILLING_*` y los secretos montados lleguen a PHP.
-- **Estado de la validación:** **no hay daemon de Docker en la sesión**, así que la imagen no se construyó. Se validó: `hadolint Dockerfile` limpio; `bash -n` del arranque;
+- **Variables y secretos:** `clear_env = no` para que `BILLING_*` lleguen a PHP; los secretos también pueden venir de archivos (`*_FILE`). `wkhtmltopdf` no hereda el entorno
+  (solo `PATH`) y corre con `disable-local-file-access`: el logo va en línea (data URI) y el HTML de entrada es el único archivo que necesita. Permisos: base y archivos solo del usuario del servicio
+  (`umask(0077)`; directorios 0750, archivos 0600).
+- **Estado de la validación (histórico, sesión cloud sin Docker):** se validó entonces: `hadolint Dockerfile` limpio; `bash -n` del arranque;
   `nginx -t`; `docker compose config`; y la **pila real fuera de Docker** (nginx 1.24 + php-fpm 8.3 de Ubuntu con esos mismos archivos de configuración, como usuario no-root con
   uid 10001): `/health`, 401, emisión con gateway simulado, descarga del XML, 400, 413, parada con SIGTERM y salida del script cuando muere php-fpm.
-  Sin comprobar: `docker build`, el nombre del paquete `nginx` y de `wkhtmltopdf` en Debian bookworm, y que runc deje stderr a nombre del usuario del contenedor
-  (necesario para `error_log = /proc/self/fd/2`; en esta sesión se emuló).
+  Después se comprobó con Docker real: `docker build`, `docker run` con `/health` (healthy), emisión con gateway fake y descarga del PDF dentro de la imagen, y que el arranque falla con
+  un mensaje claro en `PRODUCTION` sin los datos del emisor.
 - **Timeouts.** Cada llamada SOAP a SUNAT tiene límites explícitos en `VerifiedSoapClient`: conexión 10 s y lectura 30 s (se fija `default_socket_timeout` por llamada, porque
   `SoapClient` no tiene otra opción). Una emisión hace como máximo dos llamadas (consulta de CDR + envío): (10 + 30) × 2 = 80 s < `request_terminate_timeout` 110 s,
   y el cerrojo (130 s) caduca después de ambos y de `fastcgi_read_timeout` de nginx (120 s). Si se cambia un valor, revisar la cadena entera.
@@ -213,7 +218,7 @@ servicio de bajo volumen. Coste asumido: dos procesos en el contenedor (un scrip
   configuración, prepara la base y valida el certificado (vigencia, clave que corresponde, RUC del certificado si lo declara): si algo falla, el contenedor no arranca.
 - SQLite con varios procesos de php-fpm: WAL y `busy_timeout` 5 s; con 8 procesos máximo y poco volumen es suficiente. Si crece, usar `BILLING_DB_DSN` con otro motor.
 
-## Revisión adversarial del diff (Ola 2)
+## Revisión adversarial del diff
 
 Encontrado y corregido (con prueba):
 1. **TLS sin verificar hacia SUNAT** (clave SOL por ese canal): ver arriba.
@@ -235,6 +240,24 @@ Sin resolver / a vigilar:
 - Si el proceso muere entre firmar y escribir el XML hay una ventana mínima en la que el reintento firma de nuevo; no hay envío previo en ese caso (`send_attempted` aún en 0).
 - El cerrojo es por base de datos: con varias réplicas sobre SQLite no compartido no sirve; usar un motor compartido (`BILLING_DB_DSN`) o una sola réplica.
 - Anticipos (depósito y saldo) siguen sin modelarse.
+- **Estados terminales (auditoría M2):** un comprobante `ERROR` o `REJECTED` es terminal y su serie+número quedan ocupados; ver «Pendientes de la auditoría».
+- **Baja y resumen sin recuperación (auditoría S5):** ver «Pendientes de la auditoría».
+- **Retención y respaldo de SQLite (auditoría S9):** ver «Pendientes de la auditoría».
+
+## Pendientes de la auditoría (no implementados)
+
+Hallazgos de la auditoría que no se resolvieron porque dependen de una decisión de negocio, de un cambio de contrato o de un riesgo de migración. Para cada uno: propuesta y pregunta.
+
+| Id | Hoy | Propuesta | Pregunta |
+|---|---|---|---|
+| M2 estados terminales | `ERROR` (excepción de SUNAT) y `REJECTED` (CDR con código ≠ 0) son terminales: repetir la petición devuelve lo mismo, otro contenido es 409 y serie+número quedan ocupados. La clasificación es gruesa: 4 dígitos = excepción, sin código = reintentable. | Clasificar los códigos de SUNAT (excepción corregible, rechazo con CDR, observación) y permitir reemplazar el contenido de un comprobante que SUNAT nunca registró, con el mismo número. | Contador: tras una excepción o un rechazo, ¿se reutiliza el mismo correlativo corrigiendo el comprobante o se salta y se registra la baja? ¿Qué códigos tratar como corregibles? |
+| S3 `igvRate` y afectación | `igvRate` lo manda el cliente (cualquier tasa válida de formato); la afectación es siempre `10` y la operación `0101`. | Lista permitida de tasas en configuración (por defecto solo `0.1800`) y rechazo del resto; afectación configurable solo si el contador lo pide. | Contador: ¿alguna venta es exonerada, inafecta o de exportación (p. ej. turistas no domiciliados)? ¿Qué tasas son válidas? |
+| S4 tipo de cambio USD | `exchangeRate` se exige, se valida y se guarda, pero no sale en el XML ni en el PDF. | Imprimirlo en el PDF/observaciones y fijar de dónde sale (cambio SUNAT del día de emisión); si SUNAT lo exige en el XML, añadirlo. | Contador: ¿qué tipo de cambio se usa y quién lo calcula, el API o este servicio? ¿Se emite en USD o se convierte a PEN? |
+| S5 baja y resumen sin recuperación | `sendBatch` devuelve el ticket y solo entonces se guarda; si se pierde la respuesta o el proceso muere, el ticket no se registra, el correlativo `RC`/`RA` queda consumido y los comprobantes siguen `ISSUED`/`ACCEPTED`. No hay equivalente a `send_attempted` + `getStatusCdr`. | Anotar el intento antes de enviar y reconciliar (reenviar el mismo XML o consultar el ticket); endpoint o tarea que liste lotes sin ticket. | Contador/operaciones: ¿qué hacer si SUNAT ya procesó un resumen que no registramos (duplicado de `RC`)? |
+| S8 `/health` | Devuelve `ok` y el entorno sin tocar base, disco ni certificado. | Separar liveness (actual) de una comprobación de readiness: base, escritura en el almacenamiento y días de vigencia del certificado, sin exponer detalles. Cambia el contrato (repo del API). | Operaciones: ¿qué debe vigilar el monitor y con qué umbral de vencimiento del certificado? |
+| S9 retención y respaldo | SQLite en un volumen, sin respaldo ni purga. Los archivos son de trabajo; la retención legal es del API. | Respaldo periódico de la base (`.backup` de SQLite) fuera del volumen y purga de archivos ya descargados por el API; o pasar a un motor gestionado con `BILLING_DB_DSN`. | Contador: ¿plazo legal de conservación de XML/CDR y quién responde, el API o este servicio? |
+| S11 plazos SUNAT | No se valida la antigüedad de `issueDate` ni se avisa de comprobantes `PENDING`/`ISSUED` cerca del límite (boletas: 5 días calendario según la FAQ de Greenter). | Validar la ventana de `issueDate` por tipo y alertar los pendientes antiguos. | Contador: plazos vigentes de envío por tipo (factura, boleta, notas, bajas) y qué hacer al vencerlos. |
+| N1 `UNIQUE` | `UNIQUE (series, number)` sin el tipo: una factura y una nota con la misma serie y número chocarían aunque SUNAT numera por tipo y serie. | `UNIQUE (doc_type, series, number)` con migración (SQLite exige reconstruir la tabla) y el mismo criterio en `seriesInUse`. | API: ¿la numeración es por tipo+serie, como en SUNAT? |
 
 ## Cambios de contrato propuestos (para el repo del API)
 

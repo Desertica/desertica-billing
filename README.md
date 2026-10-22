@@ -1,7 +1,7 @@
 # desertica-billing
 
 Servicio interno de facturación electrónica de Desertica (SUNAT, Perú). Emite boletas, facturas y notas de crédito y débito con
-[Greenter](https://github.com/thegreenter), firma el XML, lo envía a SUNAT y guarda el CDR y el PDF. Solo lo llama `desertica-api`; no tiene
+[Greenter](https://github.com/thegreenter), firma el XML, lo envía a SUNAT y guarda el XML, el CDR y el PDF en `BILLING_STORAGE_DIR` (almacenamiento de trabajo: la conservación con retención legal es del API, que los descarga). Solo lo llama `desertica-api`; no tiene
 puerto público. El contrato es `openapi/billing.yaml` del repo `Desertica/desertica-api`.
 
 Decisiones y sus fuentes: [`docs/DECISIONS.md`](docs/DECISIONS.md).
@@ -14,19 +14,20 @@ PHP 8.3 con `soap`, `zip`, `openssl`, `dom`, `pdo_sqlite`; Composer 2; `wkhtmlto
 
 ```bash
 composer install
-cp .env.example .env            # luego define BILLING_SERVICE_TOKEN
+cp .env.example .env            # luego define BILLING_SERVICE_TOKEN; BILLING_ENV ya viene en BETA
 set -a; . ./.env; set +a
 php -S 127.0.0.1:8080 -t public public/index.php     # solo desarrollo local
 curl http://127.0.0.1:8080/health
 ```
 
-Con `BILLING_GATEWAY=fake` (por defecto) no hay red ni credenciales: SUNAT se simula.
+Con `BILLING_GATEWAY=fake` (por defecto) no hay red ni credenciales: SUNAT se simula y **acepta todo** (también en `BILLING_ENV=BETA`); `PRODUCTION` solo arranca con gateway `greenter`.
 
 ### Contenedor (producción)
 
 `docker compose up --build` levanta nginx + php-fpm como usuario no-root (uid 10001), con sistema de archivos de solo lectura, healthcheck sobre `/health` y
 logs JSON a stderr. La imagen escucha en `8080` y no se publica fuera de la red interna. Detalles y justificación: `docs/DECISIONS.md`, «Servidor de producción».
-Los secretos (certificado, claves SOL) se montan como archivos o variables de entorno; nunca van en la imagen.
+Los secretos (certificado, claves SOL, token) se montan como archivos (`BILLING_SERVICE_TOKEN_FILE`, `BILLING_CERT_PASSWORD_FILE`, `BILLING_SOL_PASSWORD_FILE`) o variables de entorno; nunca van en la imagen.
+Al arrancar, `bin/startup.php` valida la configuración y el certificado (vigencia, clave, RUC) y prepara la base: si algo falla, el contenedor no arranca. En `PRODUCTION` hay que declarar todas las `BILLING_ISSUER_*` con los datos reales.
 
 ## Endpoints
 
