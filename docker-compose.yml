@@ -11,5 +11,13 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - billing-data:/var/lib/billing
+    # Endurecimiento: sin escritura fuera del volumen y de los tmpfs, sin privilegios.
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10001,gid=10001
+      - /run/billing:uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 130s
 volumes:
   billing-data:

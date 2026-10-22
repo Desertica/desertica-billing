@@ -7,6 +7,7 @@ namespace Desertica\Billing\Tests\Http;
 use Desertica\Billing\App;
 use Desertica\Billing\Config\Settings;
 use Desertica\Billing\Sunat\FakeSunatGateway;
+use Desertica\Billing\Tests\Contract\ContractValidator;
 use Desertica\Billing\Tests\Support\FixedClock;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -17,6 +18,8 @@ use Slim\Psr7\Factory\ServerRequestFactory;
 abstract class HttpTestCase extends TestCase
 {
     protected const TOKEN = 'test-token-0123456789-0123456789-abcdef';
+
+    private static ?ContractValidator $contract = null;
 
     protected FakeSunatGateway $gateway;
     protected FixedClock $clock;
@@ -31,8 +34,18 @@ abstract class HttpTestCase extends TestCase
         $this->storageDir = sys_get_temp_dir() . '/billing-test-' . bin2hex(random_bytes(6));
         $this->gateway = new FakeSunatGateway();
         $this->clock = new FixedClock();
+        $this->rebuild();
+    }
+
+    /**
+     * Reconstruye la aplicación (base vacía) con otra configuración.
+     *
+     * @param array<string, string> $overrides
+     */
+    protected function rebuild(array $overrides = []): void
+    {
         $this->app = App::create(
-            $this->settings(),
+            $this->settings($overrides),
             new NullLogger(),
             $this->gateway,
             $this->clock,
@@ -74,7 +87,12 @@ abstract class HttpTestCase extends TestCase
             $request->getBody()->rewind();
         }
 
-        return $this->app->handle($request);
+        $response = $this->app->handle($request);
+        // Toda respuesta de toda prueba HTTP debe cumplir `openapi/billing.yaml`: así el servicio y el contrato no divergen.
+        $violations = (self::$contract ??= new ContractValidator())->violations($method, $path, $response);
+        self::assertSame([], $violations ?? [], 'La respuesta no cumple openapi/billing.yaml');
+
+        return $response;
     }
 
     /**

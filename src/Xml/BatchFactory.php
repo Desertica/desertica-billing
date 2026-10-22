@@ -66,14 +66,14 @@ final class BatchFactory
 
     private function detail(DocumentRecord $record, string $state): SummaryDetail
     {
-        /** @var array{customer: array{idDocType: string, idDocNumber: string}, affectedDocument?: array{docType: string, series: string, number: int}, igvRate: string} $request */
+        /** @var array{customer?: array{idDocType: string, idDocNumber: string}, affectedDocument?: array{docType: string, series: string, number: int}, igvRate: string} $request */
         $request = json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR);
         $detail = (new SummaryDetail())
             ->setTipoDoc(DocType::from($record->docType)->sunatCode())
             ->setSerieNro($record->series . '-' . $record->number)
             ->setEstado($state)
-            ->setClienteTipo(Catalogs::ID_TYPES[$request['customer']['idDocType']])
-            ->setClienteNro($request['customer']['idDocNumber'])
+            ->setClienteTipo(isset($request['customer']) ? Catalogs::ID_TYPES[$request['customer']['idDocType']] : Catalogs::ID_TYPE_NONE)
+            ->setClienteNro($request['customer']['idDocNumber'] ?? Catalogs::ANONYMOUS_NUMBER)
             ->setTotal((float) TaxCalculator::money($record->totalCents))
             ->setMtoOperGravadas((float) TaxCalculator::money($record->taxableCents))
             ->setMtoIGV((float) TaxCalculator::money($record->igvCents));

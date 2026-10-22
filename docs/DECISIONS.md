@@ -61,8 +61,8 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
 ## Arquitectura
 
 - **Stack:** PHP 8.3, Slim 4, PDO (SQLite por defecto, DSN configurable), PHPUnit 11, PHPStan nivel 8, PSR-12 (`phpcs`).
-- **Servidor en contenedor:** `php -S` con `PHP_CLI_SERVER_WORKERS=4`. Es sencillo y suficiente para un servicio interno de bajo volumen
-  detrás de la red interna; si el volumen crece, cambiar a php-fpm + nginx. Sin DI container: el cableado es manual en `App::create`.
+- **Servidor en contenedor:** nginx + php-fpm, como usuario no-root (ver «Servidor de producción» más abajo). `php -S` queda solo para
+  desarrollo local (README). Sin DI container: el cableado es manual en `App::create`.
 - **Datos del emisor** (RUC, razón social, dirección, ubigeo) y las credenciales viven en este servicio (variables de entorno). El contrato
   no los envía.
 - **Entorno explícito:** `BILLING_ENV` es obligatorio (`BETA` o `PRODUCTION`), aparece en `/health`, y `PRODUCTION` exige gateway `greenter`.
@@ -111,9 +111,131 @@ Versión instalada: 5.3.0. Requiere `ext-soap` (cliente SUNAT) y el binario `wkh
   y `tests/SunatBeta` se activa solo cuando hay credenciales y el host es alcanzable.
 - Clasificación de errores: «código de 4 dígitos = excepción de SUNAT (422); sin código = fallo de conexión (502, reintentable)». Los códigos
   0100–0199 incluyen errores de autenticación del usuario SOL, que aquí también salen como 422; confirmar con la lista de códigos de SUNAT.
-- Si SUNAT recibió un comprobante pero se perdió la respuesta, el reenvío del mismo XML puede dar el error de «comprobante ya registrado» y el
-  servicio lo tratará como 422. Falta consultar el CDR por `getStatusCdr` (servicio de consulta de CDR, solo producción en Greenter:
-  `SunatEndpoints::FE_CONSULTA_CDR`).
-- Leyenda 2004 «Agencia de Viaje – Paquete turístico» (catálogo 52 de la extracción de terceros): no se emite; puede aplicar al giro de Desertica.
-  Consultar al contador junto con el tratamiento de anticipos (depósito y saldo).
-- `php -S` con workers es el servidor del contenedor (ver «Arquitectura»).
+- Recuperación por `getStatusCdr`, TLS verificado hacia SUNAT, `BILLING_ALREADY_REGISTERED_CODES` y la URL de consulta en BETA: ver la sección
+  «Recuperación cuando se pierde la respuesta» (qué está verificado y qué no).
+- Tratamiento de anticipos (depósito y saldo): sigue pendiente de consultar al contador. Las otras decisiones del contador (unidad, leyenda 2004,
+  boleta sin receptor) ya son configuración: ver «Decisiones del contador».
+
+## Contrato reconciliado (Ola 2)
+
+- Copia sin modificar del contrato en `openapi/billing.yaml` (origen y commit en `openapi/README.md`). Cada respuesta de cada prueba HTTP se valida contra él
+  (`tests/Contract/ContractValidator`, con `opis/json-schema`): una respuesta con un estado que la operación no documenta, un código fuera del `enum`
+  o un campo con otro tipo hace fallar la suite. `tests/Contract/ContractValidatorTest` comprueba que el validador de verdad detecta divergencias.
+- `POST /v1/summaries/daily` acepta `currency` (`PEN` o `USD`): atiende esa moneda; sin ella, la siguiente pendiente (PEN primero). Repetir la misma
+  moneda devuelve su ticket sin reenviar. Los resúmenes que solo anulan boletas (baja de boleta) ya no se devuelven como «resumen del día».
+- El contrato define `hash` como `string` sin `null`: cuando todavía no hay XML firmado el campo se omite en vez de enviarse como `null`
+  (lo encontró el validador).
+- Fuera del contrato, nginx responde `413` (JSON `VALIDATION_ERROR`) a cuerpos de más de 1 MB.
+
+## Decisiones del contador (configuración, valores por defecto seguros)
+
+No las decide el servicio: son variables de entorno cuyo valor por defecto es el más restrictivo. **Hasta que el contador confirme, los valores por
+defecto son los vigentes.**
+
+| Variable | Defecto | Efecto | Qué debe confirmar el contador |
+|---|---|---|---|
+| `BILLING_UNIT_CODE` | `NIU` | Unidad de medida (catálogo 03) de todas las líneas. Solo se valida el formato (1 a 3 caracteres A-Z/0-9). | Si para paquetes turísticos corresponde `NIU`, `ZZ` (servicio) u otra. No se verificó la lista del catálogo 03. |
+| `BILLING_LEGEND_2004` | `false` | Añade la leyenda 2004 «Agencia de Viaje – Paquete turístico» a **boletas y facturas** (no a notas). | Si Desertica debe emitirla, a qué documentos, y el texto exacto. Código y texto salen de la extracción de terceros del catálogo 52, no del Anexo oficial. |
+| `BILLING_ANONYMOUS_BOLETA_MAX_CENTS` | `0` | `0`: el receptor es siempre obligatorio (422 sin `customer`). `> 0`: una **boleta en PEN** con total ≤ ese monto (céntimos, IGV incluido) puede omitir `customer`; el XML lleva tipo de documento `0`, número `-` y «CLIENTES VARIOS». | **El tope legal vigente** (el servicio no lo asume; no hay valor por defecto distinto de 0). También si el receptor `0`/`-`/«CLIENTES VARIOS» es lo que SUNAT espera. No aplica a USD, facturas ni notas. |
+
+Notas:
+- Con `customer` omitido, el contrato actual (que lo declara obligatorio) queda corto: ver «Cambios de contrato propuestos».
+- La boleta sin receptor entra al resumen diario con tipo `0` y número `-`; se valida contra el XSD. Un cambio posterior de `customer` es otro contenido: 409.
+- Cada interruptor tiene su prueba (`SettingsTest`, `AccountantOptionsTest`, `AccountantDecisionsTest`).
+
+## Recuperación cuando se pierde la respuesta de SUNAT
+
+**Problema.** El envío llega a SUNAT pero la respuesta se pierde (timeout, corte). El API reintenta con la misma `externalId`; reenviar el mismo XML puede
+dar «comprobante ya registrado», que antes terminaba en un 422 definitivo.
+
+**Mecanismo.**
+1. El servicio anota `send_attempted` **antes** de la llamada de red. En un reintento con ese marcador pregunta primero por el CDR (`consultCdr`) y,
+   si SUNAT lo tiene, lo adopta (ACCEPTED o REJECTED según el código del CDR) **sin reenviar**. Si no hay constancia, reenvía el mismo XML firmado.
+2. Si el envío contesta con un código de `BILLING_ALREADY_REGISTERED_CODES` (por defecto `1033`), consulta el CDR. Si la consulta falla, responde `502`
+   reintentable y el comprobante sigue `PENDING` (no se marca ERROR por un fallo transitorio de la consulta). Si SUNAT no tiene constancia, `422 SUNAT_EXCEPTION`.
+3. La consulta es `ConsultCdrService::getStatusCdr(ruc, tipo, serie, número)` de Greenter (servicio `billConsultService`), con **las mismas credenciales SOL**
+   (usuario `RUC+usuario` y clave, WS-Security UsernameToken). Lee el CDR del propio contenido de la respuesta (`content` + `ApplicationResponse`), no el
+   `statusCode` de la consulta: así no depende de cómo SUNAT numere sus estados.
+
+**Qué está verificado y qué no (sin acceso a SUNAT en esta sesión).**
+- Verificado en el código de Greenter instalado: clase, firma de `getStatusCdr`, endpoint `SunatEndpoints::FE_CONSULTA_CDR`
+  (`https://e-factura.sunat.gob.pe/ol-it-wsconscpegem/billConsultService`, **producción**) y que las pruebas de Greenter usan credenciales `RUC+usuario`.
+  Los docs de Greenter (`usage.md`) solo describen `getStatus(ticket)`; no documentan `getStatusCdr`.
+- **No verificado:** el código exacto de «ya registrado». `1033` («El comprobante fue registrado previamente con otros datos») sale de una búsqueda web
+  de terceros; por eso es configurable. Confirmar con la lista de códigos de error de SUNAT.
+- **No verificado:** si la consulta existe en beta. Por eso `BILLING_CDR_CONSULT_URL` está vacía en BETA y solo se activa por defecto en PRODUCTION
+  (en BETA hay que fijarla explícitamente). Tampoco se verificó si el servicio admite boletas (si no devuelve constancia, la recuperación simplemente no ocurre).
+- **Riesgo asumido:** el CDR de la consulta no incluye el hash del XML. Si SUNAT tuviera registrado el número con *otro* XML, se adoptaría su CDR. Esto solo puede
+  pasar si se perdió la base de este servicio (nunca se firma dos veces el mismo comprobante: ver cerrojos).
+
+**Concurrencia (revisión adversarial).** Dos peticiones simultáneas con la misma `externalId` podían firmar dos veces (firmas distintas) y mandar a SUNAT dos
+versiones del mismo número, que es justo el caso «registrado con otros datos». Ahora cada emisión, baja y resumen toma un cerrojo con caducidad en la base
+(`locks`, 130 s > 110 s del límite de php-fpm). Si está ocupado: la emisión responde el estado actual (`PENDING`, 200); la baja, `409 VOID_CONFLICT`; el resumen, `502`
+reintentable. Se relee el estado con el cerrojo tomado.
+
+## TLS hacia SUNAT (hallazgo de la revisión)
+
+`Greenter\See` crea su `SoapClient` con `verify_peer` y `verify_peer_name` en `false`, y por ese canal viaja la clave SOL. `GreenterSunatGateway::connect` sustituye
+el cliente por `VerifiedSoapClient` (verificación activa, `connection_timeout` 10 s, `BILLING_SUNAT_CA_FILE` opcional). `tests/Unit/VerifiedSoapClientTest` lo comprueba
+contra un servidor TLS local con certificado autofirmado: el cliente de Greenter conecta; el nuestro lo rechaza.
+- `See` guarda su cliente en una propiedad privada: se reemplaza con una closure; `GreenterSunatGatewayTest::testConnectReplacesGreenterClientsWithTlsVerifyingOnes`
+  falla si Greenter cambia esa propiedad (versión fijada `^5.3`).
+- **Riesgo no probado:** la FAQ de Greenter menciona problemas al validar el certificado SSL de SUNAT. Con el host bloqueado no se pudo comprobar que la cadena
+  de `e-beta`/`e-factura` valide con el almacén del sistema de la imagen. Si falla, usar `BILLING_SUNAT_CA_FILE`; no se añadió un interruptor para apagar la verificación.
+
+## Servidor de producción
+
+**Elegido: nginx + php-fpm** en un solo contenedor, como usuario `billing` (uid 10001).
+
+Por qué no FrankenPHP: (1) cada petición en php-fpm termina con su proceso limpio; en el modo worker de FrankenPHP el estado persiste entre peticiones y aquí pasan por el
+proceso el certificado, la clave SOL y los XML; (2) php-fpm/nginx son lo que cualquier equipo PHP sabe operar y depurar; (3) la imagen oficial `php:8.3-fpm` permite
+instalar `soap`, `zip` y `pdo_sqlite` igual que antes y `wkhtmltopdf` desde apt; (4) FrankenPHP añade un runtime (Caddy/Go) y su propia política de actualizaciones por un
+servicio de bajo volumen. Coste asumido: dos procesos en el contenedor (un script de arranque los vigila y sale si cualquiera muere).
+
+- **Non-root:** nginx y php-fpm sin directivas `user`; socket Unix en `/run/billing`, temporales en `/tmp`; la imagen funciona con `read_only: true` + tmpfs
+  (el compose lo usa) y `cap_drop: [ALL]`.
+- **Healthcheck:** `GET /health` a través de nginx y php-fpm (comprueba la cadena entera).
+- **Logs a stderr en JSON sin secretos:** la aplicación escribe una línea por petición (método, ruta, estado, duración; **sin** cabeceras, query ni cuerpo) y sus eventos con
+  `StderrLogger`; los avisos/excepciones de PHP pasan por el mismo logger (`PhpErrorLogging`, sin trazas) y `zend.exception_ignore_args=On`. nginx no registra accesos
+  (`access_log off`); su log de errores y el de php-fpm van a stderr **en texto**, no JSON (nginx y php-fpm no lo soportan sin más).
+- **Parada ordenada:** SIGTERM → SIGQUIT a ambos (terminan las peticiones en curso, p. ej. un envío a SUNAT); `stop_grace_period: 130s` en el compose.
+- **Variables:** `clear_env = no` para que `BILLING_*` y los secretos montados lleguen a PHP.
+- **Estado de la validación:** **no hay daemon de Docker en la sesión**, así que la imagen no se construyó. Se validó: `hadolint Dockerfile` limpio; `bash -n` del arranque;
+  `nginx -t`; `docker compose config`; y la **pila real fuera de Docker** (nginx 1.24 + php-fpm 8.3 de Ubuntu con esos mismos archivos de configuración, como usuario no-root con
+  uid 10001): `/health`, 401, emisión con gateway simulado, descarga del XML, 400, 413, parada con SIGTERM y salida del script cuando muere php-fpm.
+  Sin comprobar: `docker build`, el nombre del paquete `nginx` y de `wkhtmltopdf` en Debian bookworm, y que runc deje stderr a nombre del usuario del contenedor
+  (necesario para `error_log = /proc/self/fd/2`; en esta sesión se emuló).
+- SQLite con varios procesos de php-fpm: WAL y `busy_timeout` 5 s; con 8 procesos máximo y poco volumen es suficiente. Si crece, usar `BILLING_DB_DSN` con otro motor.
+
+## Revisión adversarial del diff (Ola 2)
+
+Encontrado y corregido (con prueba):
+1. **TLS sin verificar hacia SUNAT** (clave SOL por ese canal): ver arriba.
+2. **Texto que rompe el XML firmado:** `]]>` en una descripción o nombre cerraba el CDATA de Greenter, y U+FFFE/U+FFFF no son caracteres válidos de XML; ambos acababan en
+   `500 INTERNAL_ERROR` con la fila en `PENDING` y el API reintentando sin fin. Ahora son `422 VALIDATION_ERROR` antes de insertar. También probados y aceptados: `& < > " '`,
+   emoji, CJK, árabe, `{{ 7*7 }}` (Twig no evalúa datos), saltos de línea y tabuladores.
+3. **Desbordamiento de enteros:** montos cercanos a `PHP_INT_MAX` desbordaban `quantity × unitPriceCents`, `2 × total × 10 000` y `base × 10^10` (TypeError → 500). Topes: ítem ≤ 100 000 000
+   céntimos (S/ 1 000 000), documento ≤ 50 000 000 000; con el máximo, el cálculo es exacto.
+4. **Concurrencia sobre la misma `externalId`:** ver cerrojos.
+5. **Secretos en mensajes:** los mensajes de SoapFault y de error de SUNAT se devuelven al API y se registran; ahora el gateway y el logger tachan el usuario/clave SOL,
+   la clave del certificado y el token de servicio si aparecen en el texto (`SecretScrubbingTest`). Los logs de petición no llevan cabeceras, query ni cuerpo.
+6. **Inyección en el PDF:** los textos del cliente van al HTML de wkhtmltopdf. Se comprobó que la plantilla de Greenter los escapa (`<iframe src=file://…>` queda inerte);
+   `PrintedRepresentationEscapingTest` lo fija. Solo `header` y `footer` usan `|raw` y los fija este servicio en vacío.
+7. **Resumen diario devolvía una baja:** `latestSummary` podía devolver el ticket de una baja de boleta como «resumen del día».
+
+Redondeos: sin cambios en `TaxCalculator` (mitad hacia arriba por línea, suma de líneas); se añadió la prueba del máximo permitido.
+
+Sin resolver / a vigilar:
+- Si el proceso muere entre firmar y escribir el XML hay una ventana mínima en la que el reintento firma de nuevo; no hay envío previo en ese caso (`send_attempted` aún en 0).
+- El cerrojo es por base de datos: con varias réplicas sobre SQLite no compartido no sirve; usar un motor compartido (`BILLING_DB_DSN`) o una sola réplica.
+- Anticipos (depósito y saldo) siguen sin modelarse.
+
+## Cambios de contrato propuestos (para el repo del API)
+
+1. `customer` opcional en `EmitDocumentRequest` **solo si** el contador activa `BILLING_ANONYMOUS_BOLETA_MAX_CENTS`; hoy el contrato lo declara `required`. Alternativa sin
+   cambio de esquema: que el API envíe `idDocType`/`idDocNumber`/`name` genéricos; el servicio no tiene un tipo de documento «sin documento» en el enum `idDocType`.
+2. Documentar que `POST /v1/documents` puede responder `200` con `status: PENDING` cuando otra petición con la misma `externalId` está en curso (el API debe consultar
+   `GET /v1/documents/{externalId}` o reintentar), y que `POST /v1/summaries/daily` responde `502` reintentable si ya hay un resumen de esa fecha en curso.
+3. Añadir `maximum` a `totalCents` (50 000 000 000), `Item.unitPriceCents` y `Item.totalCents` (100 000 000), y `maxLength` a las cadenas (descripción 250, nombre 200); y
+   documentar el `413` de cuerpos mayores de 1 MB y que el texto no puede contener `]]>` ni controles XML.
+4. Registrar en `EmitDocumentResult.hash` que se omite mientras no hay XML firmado (hoy el esquema ya lo permite al no ser `required`).
