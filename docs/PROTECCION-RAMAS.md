@@ -37,6 +37,12 @@ Intenta `git push origin main` directo: debe rechazarlo. Abre un PR: el boton Me
 - "certificado versionado" / ".env versionado" / "clave privada versionada": quita el archivo del PR. Si ya se subio a algun commit, el secreto esta comprometido: avisa de inmediato para revocar el certificado o cambiar la clave SOL; borrar el archivo despues no basta.
 - Falla de gitleaks: lee el reporte del job; si es un falso positivo, se agrega a `.gitleaksignore` (nunca se desactiva el check).
 
+## Requisitos del esqueleto PHP
+
+Para que `php` proteja de verdad, el esqueleto debe incluir `phpstan/phpstan` con nivel 6 o mayor (`phpstan.neon.dist`) y un estandar de estilo PSR-12 (`squizlabs/php_codesniffer` con `phpcs.xml.dist`, o `php-cs-fixer`), con los scripts de composer `lint` y `analyse`. El CI invoca las herramientas directamente; si faltan, esos pasos se omiten en silencio con un mensaje.
+
+El workflow corre en cada push y en cada PR (cualquier rama); un push nuevo cancela la ejecucion anterior de la misma rama.
+
 ## Nota
 
 `php` termina en verde con un mensaje cuando todavia no hay `composer.json`; en cuanto aparece, ejecuta `composer validate --strict`, `install`, `audit`, phpstan (si esta en composer.json) y phpunit (si hay `phpunit.xml(.dist)`).

@@ -4,7 +4,11 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, develop]
+    branches: ['**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -66,6 +70,16 @@ jobs:
         run: composer install --no-interaction --prefer-dist
       - if: steps.d.outputs.has == 'true'
         run: composer audit
+      - name: lint
+        if: steps.d.outputs.has == 'true'
+        run: |
+          if grep -q '"squizlabs/php_codesniffer"' composer.json; then
+            vendor/bin/phpcs
+          elif grep -q '"friendsofphp/php-cs-fixer"' composer.json; then
+            vendor/bin/php-cs-fixer fix --dry-run --diff
+          else
+            echo "Sin phpcs ni php-cs-fixer en composer.json: se omite el lint."
+          fi
       - name: phpstan
         if: steps.d.outputs.has == 'true'
         run: |
