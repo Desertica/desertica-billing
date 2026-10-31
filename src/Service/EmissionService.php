@@ -143,7 +143,8 @@ final class EmissionService
     private function signAndSubmit(DocumentRecord $record, EmitRequest $request): DocumentRecord
     {
         $lock = self::lockName($record->externalId);
-        if (!$this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS)) {
+        $owner = $this->locks->acquire($lock, $this->clock->now()->getTimestamp(), self::LOCK_SECONDS);
+        if ($owner === null) {
             // Otra petición con la misma externalId está firmando o enviando: no se compite con ella (firmaría un XML distinto).
             // Se devuelve el estado actual (PENDING); el API consulta `GET /v1/documents/{externalId}` o reintenta.
             $this->logger->info('emission_in_progress', ['externalId' => $record->externalId]);
@@ -163,7 +164,7 @@ final class EmissionService
 
             return $this->process($current, $request);
         } finally {
-            $this->locks->release($lock);
+            $this->locks->release($lock, $owner);
         }
     }
 
@@ -295,12 +296,8 @@ final class EmissionService
         $record = $this->get($externalId);
         $content = $this->storage->read($externalId, $kind);
         if ($content === null && $kind === FileStorage::PDF && $record->hasXml) {
-            // Se rehidrata una petición ya aceptada: el tope de boleta sin receptor no debe volver a rechazarla.
-            $request = (new RequestValidator(PHP_INT_MAX))->validate(
-                json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR),
-                new \DateTimeImmutable($record->issueDate . ' 23:59:59', new \DateTimeZone('America/Lima')),
-            );
-            $this->renderPdf($record, $request);
+            // Se rehidrata la petición ya aceptada, sin validarla de nuevo con las reglas (tope, fecha, catálogos) de hoy.
+            $this->renderPdf($record, EmitRequest::fromArray(json_decode($record->requestJson, true, 512, JSON_THROW_ON_ERROR)));
             $content = $this->storage->read($externalId, FileStorage::PDF);
         }
 

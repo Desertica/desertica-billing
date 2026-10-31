@@ -5,6 +5,9 @@ set -u
 
 mkdir -p /tmp/nginx
 
+# Configuración y certificado válidos antes de aceptar tráfico (falla rápido con un mensaje claro).
+php /app/bin/startup.php || exit 1
+
 php-fpm --nodaemonize --fpm-config /usr/local/etc/php-fpm.conf &
 fpm_pid=$!
 # -e stderr: el registro de errores compilado por defecto (/var/log/nginx) no es escribible sin root.

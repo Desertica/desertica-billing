@@ -12,10 +12,10 @@ PHP 8.3, Composer, `greenter/*`, Slim 4, PDO (SQLite por defecto). Contenedor pr
 
 - **El contrato manda.** Implementa `openapi/billing.yaml`; un cambio de contrato se hace primero por PR en el repo del API.
 - **Idempotencia por `externalId`**: repetir una emisión devuelve el resultado guardado; la misma `externalId` con otro contenido es `409`.
-- **El API es dueño de series y correlativos.** Este servicio recibe `series` y `number` y no lleva contadores.
-- **Montos**: enteros en la unidad menor con IGV incluido. Calcula base imponible e IGV con `igvRate` y redondea a céntimos de forma determinista; hay pruebas para eso. En USD exige el tipo de cambio SUNAT.
-- **Secretos**: el certificado digital (.pfx), su clave y las credenciales SOL **nunca se commitean ni se loguean**. Se leen de variables de entorno o de secretos montados. En desarrollo y en sesiones cloud solo existen un certificado de prueba y el entorno **SUNAT beta**; el certificado y la clave SOL reales no salen del servidor de producción.
-- El entorno (`BETA` o `PRODUCTION`) es configuración explícita y visible en `/health`; nunca se infiere.
+- **El API es dueño de series y correlativos.** Este servicio recibe `series` y `number` y no lleva contadores de comprobantes (solo los correlativos propios de los resúmenes `RC` y las bajas `RA`).
+- **Montos**: enteros en la unidad menor con IGV incluido. Calcula base imponible e IGV con `igvRate` y redondea a céntimos de forma determinista; hay pruebas para eso. En USD exige `exchangeRate`; se valida y se guarda, pero todavía no se escribe en el XML ni en el PDF (ver «Pendientes de la auditoría» en `docs/DECISIONS.md`).
+- **Secretos**: el certificado digital (.pfx), su clave y las credenciales SOL **nunca se commitean ni se loguean**. Se leen de variables de entorno o de archivos montados (`BILLING_SERVICE_TOKEN_FILE`, `BILLING_CERT_PASSWORD_FILE`, `BILLING_SOL_PASSWORD_FILE`; el valor directo y el `_FILE` son excluyentes). En desarrollo y en sesiones cloud solo existen un certificado de prueba y el entorno **SUNAT beta**; el certificado y la clave SOL reales no salen del servidor de producción.
+- El entorno (`BETA` o `PRODUCTION`) es configuración explícita (`BILLING_ENV`) y visible en `/health`; nunca se infiere. `PRODUCTION` exige gateway `greenter`, todas las `BILLING_ISSUER_*` (sin RUC de prueba ni datos de ejemplo) y un certificado vigente cuya clave corresponda; `bin/startup.php` lo valida al arrancar el contenedor.
 - Los archivos (XML firmado, CDR, PDF) se guardan en `BILLING_STORAGE_DIR/<externalId>/` y el API los descarga con `GET /v1/documents/{externalId}/files/{xml|cdr|pdf}` y los conserva con retención legal.
 - Verifica los códigos de catálogo SUNAT (motivo de nota de crédito, afectación del IGV) y si las boletas van una a una o por resumen diario con la documentación de Greenter y de SUNAT antes de implementarlos; no los escribas de memoria.
 - Nunca commitees `.env`.
@@ -23,15 +23,16 @@ PHP 8.3, Composer, `greenter/*`, Slim 4, PDO (SQLite por defecto). Contenedor pr
 ## Commands
 
 ```bash
-composer install && cp .env.example .env   # una vez; define BILLING_SERVICE_TOKEN
+composer install && cp .env.example .env   # una vez; define BILLING_SERVICE_TOKEN (BILLING_ENV ya viene en BETA)
 composer lint                              # phpcs (PSR-12)
 composer stan                              # phpstan nivel 8
 composer test                              # phpunit, sin red
 composer check                             # lint + stan + test
-php -S 127.0.0.1:8080 -t public public/index.php   # con las variables de .env exportadas
+php -S 127.0.0.1:8080 -t public public/index.php   # con las variables de .env exportadas (set -a; . ./.env; set +a)
+BILLING_SERVICE_TOKEN=<32+ caracteres> docker compose up --build   # imagen real (nginx + php-fpm), gateway fake, 127.0.0.1:8080
 ```
 
-Requiere PHP 8.3 con `soap`, `zip`, `pdo_sqlite` y el binario `wkhtmltopdf` para el PDF. Las pruebas sin red generan y firman el XML con un
+Requiere PHP 8.3 con `soap`, `zip`, `dom`, `openssl`, `pdo_sqlite` y el binario `wkhtmltopdf` para el PDF. Las pruebas sin red generan y firman el XML con un
 certificado de prueba (creado en tiempo de ejecución con `openssl`) y las validan contra el XSD. Pruebas con red: `tests/SunatBeta`, requieren
 permitir `e-beta.sunat.gob.pe` en el entorno y se saltan solas si no es alcanzable. Decisiones y fuentes: `docs/DECISIONS.md`.
 

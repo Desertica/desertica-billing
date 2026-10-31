@@ -10,11 +10,13 @@ namespace Desertica\Billing\Persistence;
  */
 final class Database
 {
+    private const VERSION = 2;
+
     public static function connect(string $dsn): \PDO
     {
         if (str_starts_with($dsn, 'sqlite:') && !str_contains($dsn, ':memory:')) {
             $dir = dirname(substr($dsn, 7));
-            if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
                 throw new \RuntimeException('No se pudo crear el directorio de la base de datos.');
             }
         }
@@ -36,10 +38,30 @@ final class Database
                 $pdo->exec('PRAGMA journal_mode = WAL');
             }
         }
-        self::migrate($pdo);
+        if (self::version($pdo) < self::VERSION) {
+            self::migrate($pdo);
+        }
     }
 
-    public static function migrate(\PDO $pdo): void
+    /**
+     * Versión del esquema aplicada (0 si la base es nueva o anterior a `schema_version`).
+     */
+    private static function version(\PDO $pdo): int
+    {
+        try {
+            $result = $pdo->query('SELECT MAX(version) FROM schema_version');
+
+            return $result === false ? 0 : (int) $result->fetchColumn();
+        } catch (\PDOException) {
+            return 0;
+        }
+    }
+
+    /**
+     * Crea o completa el esquema y anota la versión: las peticiones siguientes solo leen `schema_version`.
+     * Para cambiar el esquema: añade el cambio aquí (idempotente) y sube VERSION.
+     */
+    private static function migrate(\PDO $pdo): void
     {
         $pdo->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS documents (
@@ -104,9 +126,16 @@ SQL);
         $pdo->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS locks (
     name TEXT PRIMARY KEY,
-    until INTEGER NOT NULL
+    until INTEGER NOT NULL,
+    owner TEXT NOT NULL DEFAULT ''
 )
 SQL);
+        // Bases creadas antes de `owner` (versión 2): se añade la columna una sola vez.
+        try {
+            $pdo->exec("ALTER TABLE locks ADD COLUMN owner TEXT NOT NULL DEFAULT ''");
+        } catch (\PDOException) {
+            // Ya existe.
+        }
         // Correlativos de los resúmenes diarios (RC) y comunicaciones de baja (RA): los lleva este servicio
         // porque son documentos propios, no series de comprobantes (esas son del API).
         $pdo->exec(<<<'SQL'
@@ -117,5 +146,10 @@ CREATE TABLE IF NOT EXISTS batch_sequences (
     PRIMARY KEY (kind, day)
 )
 SQL);
+        $pdo->exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
+        $pdo->exec(sprintf(
+            'INSERT INTO schema_version (version) SELECT %1$d WHERE NOT EXISTS (SELECT 1 FROM schema_version WHERE version = %1$d)',
+            self::VERSION,
+        ));
     }
 }
